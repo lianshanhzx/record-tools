@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>TY 录制工具</title>
+    <meta charset="utf-8">
+    <link rel="stylesheet" href="./index.css">
+</head>
+<body>
+    <div class="app">
+        <!-- Header -->
+        <div class="header">
+            <span class="logo">TY-record-tools</span>
+            <span class="header-badge" id="recordCount">0 条</span>
+        </div>
+
+        <!-- Recording Controls -->
+        <div class="record-bar" id="recordBar">
+            <!-- <span class="record-logo">录</span> -->
+            <button id="recordStartBtn" class="record-btn start">开始录制</button>
+            <button id="recordStopBtn" class="record-btn stop" style="display:none">终止录制</button>
+            <button id="recordPauseBtn" class="record-btn pause" style="display:none">暂停录制</button>
+            <button id="recordContinueBtn" class="record-btn continue" style="display:none">继续录制</button>
+        </div>
+
+        <!-- Auto Fill (collapsible, above list) -->
+        <div class="fill-bar" id="fillBar">
+            <span class="fill-bar-title">智能自动填表</span>
+            <span class="fill-bar-sub">输入一句话，自动填写 Element UI 表单</span>
+            <span class="arrow" id="fillToggleArrow">▾</span>
+        </div>
+        <div class="fill-body" id="fillBody">
+            <div class="fill-input-row">
+                <textarea id="fillInstruction" placeholder='输入指令，如：随机填写个人信息 或 姓名填张三，手机号自动生成' rows="2"></textarea>
+                <button id="executeFillBtn">执行</button>
+            </div>
+            <div class="fill-summary" id="fillSummary"></div>
+            <div class="fill-log" id="fillLog">
+                <div class="fill-log-empty">等待操作...</div>
+            </div>
+                <div class="fill-config-toggle" id="fillConfigToggle">
+                <span>LLM 配置</span>
+                <span class="arrow" id="fillConfigArrow">▸</span>
+            </div>
+            <div class="fill-config" id="fillConfig">
+                <label>API Key</label>
+                <input type="password" id="fillApiKey" placeholder="sk-...">
+                <label>API 地址</label>
+                <input type="text" id="fillBaseUrl" value="https://api.deepseek.com/v1">
+                <label>模型</label>
+                <input type="text" id="fillModel" value="deepseek-chat">
+                <div class="fill-config-actions">
+                    <button id="saveFillConfig">保存</button>
+                    <span id="fillConfigStatus"></span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Record List -->
+        <div class="list-header">
+            <span>操作列表</span>
+        </div>
+        <div class="list-head-row">
+            <span class="col-seq">序号</span>
+            <span class="col-cmd">Command</span>
+            <span class="col-name">业务对象名称</span>
+            <span class="col-ttype">TargetType</span>
+            <span class="col-target">Target</span>
+            <span class="col-val">Value</span>
+        </div>
+        <div class="list-body" id="listBody"></div>
+
+        <!-- Edit & Actions -->
+        <div class="edit-area">
+            <div class="edit-row">
+                <span class="edit-label">Command</span>
+                <select id="editCmd"><option>click</option><option>input</option><option>select</option></select>
+                <button id="saveCmdBtn">更改</button>
+                <button id="deleteCmdBtn" class="danger">删除</button>
+            </div>
+            <div class="edit-row">
+                <span class="edit-label">业务对象名称</span>
+                <input id="editName" type="text">
+                <button id="saveNameBtn">更改</button>
+            </div>
+            <div class="edit-row">
+                <span class="edit-label">Value</span>
+                <input id="editVal" type="text">
+                <button id="saveValBtn">更改</button>
+            </div>
+        </div>
+
+        <!-- Bottom Actions -->
+        <div class="actions-bar">
+            <button id="clearBtn">重录</button>
+            <button id="downloadBtn">下载</button>
+            <button id="submitBtn" class="primary">提交</button>
+        </div>
+    </div>
+</body>
+<script src="../config.js"></script>
+<script src="../libs/jquery.js"></script>
+<script src="./index.js"></script>
+</html>

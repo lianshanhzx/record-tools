@@ -1,0 +1,65 @@
+{
+    "name": "TY-record-tools",
+    "version": "1.1",
+    "manifest_version": 3,
+    "description": "天阳录制工具", 
+    "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAlJcNBBLVjFQZ8nitf+TBm3bODJM5bOQ3supfSMVU5F6b6AkBPb6GvmChJEgMhnf70g8Qw+V5lvaq1Euf+gwuugU8BTsLL4KkCACVN5UP9Ki0N9NImQ7872a8yw7uxFJ0w9W7qKgS1FoUAq4vICMOX1jtdvQ3AImoe1bOdqy3v7nsKMaffErgfblDBW/N+5oWoA3Wahmay9kPj0k4XJBv2S/8XzA+98exCX5e5mdfs7atp2J/8b8c2Tx/2XStoM5WcpaTcBftcieVtPjFRgQerEv80J8ecg92uFHaYDNnnigwghZf7hf6EXVQcgI0aGFWtk6ob+2HH707Swjl2ygbgQIDAQAB",
+    "author": "1746809408@qq.com", 
+    "icons": {
+        "16": "/icons/16.png",
+        "32": "/icons/32.png",
+        "48": "/icons/48.png",
+        "128": "/icons/128.png"
+    },
+    "background": {
+        "service_worker": "service-worker.js"
+    }, 
+    "content_scripts": [
+        {
+        "matches": ["<all_urls>"],
+        "js": ["/libs/autoFormFill.js", "/libs/smartSelector.js" ,"/libs/elementBusinessName.js","/libs/getLabel.js", "libs/myXPathHelper.js" ,"/setting/content.js" ],
+        "css": ["/setting/content.css"]
+        }
+    ],
+    "action": { 
+        "default_icon": {
+            "16": "/icons/16.png",
+            "32": "/icons/32.png",
+            "48": "/icons/48.png",
+            "128": "/icons/128.png"
+        }
+    },
+   
+
+    "externally_connectable": {
+        "ids": [
+          "*"
+        ],
+    
+        "matches": [
+          "http://101.89.127.196/*",
+          "http://101.89.127.199/*",
+          "http://11.1.198.131/*", //低版本浏览器需要配置自动化IP
+          
+          "*://*/*",
+          "http://*/*",
+          "https://*/*",
+          "<all_urls>"
+       
+         ]
+    },
+      
+    "permissions": [
+        "storage",
+        "activeTab", 
+        "notifications",
+        "scripting",
+        "windows",
+        "downloads",
+        "tabs"
+    ],
+    "host_permissions": [
+        "<all_urls>"
+    ]
+    
+}
