@@ -32,6 +32,10 @@ let _snapshot = {
 
   actions: [],
 
+  pendingTreeSelect: null,
+
+  lastTreeSelect: null,
+
   _docu: null,
 
   getActions() {
@@ -56,6 +60,8 @@ let _snapshot = {
     try {
       nameMap = {}
       currId = ''
+      this.pendingTreeSelect = null
+      this.lastTreeSelect = null
       if (listenDomList.length > 0) {
         listenDomList.forEach(item => {
           item.removeAttribute('isonclick')
@@ -163,17 +169,33 @@ let _snapshot = {
 
     //相对路劲xpath
     let xp = new SmartSelector(element).getSelector();
-
+    let actionType = '';
+    
+    console.log('----element--1111---',element ,element.type ,element['command'])
+    
+    if (element['command'] === 'fill_date_field') {
+        actionType = 'fill_date_field';
+        element['command'] = 'input'
+    }else if (element['command'] === 'input' || element['command'] === 'fill_form_field') {
+       actionType = 'fill_form_field';
+    } else if (element['command'] === 'click') {
+        actionType = 'click_element_by_index';
+    } else if (element['command'] === 'selectOption' || element['command'] === 'select') {
+        actionType = 'select_option';
+    } else if (element['command'] === 'select_tree_option') {
+        actionType = 'select_tree_option';
+    }
+    
     return {
       // children: [],
       id: id,
+      action:actionType,
       command: element['command'],
       // xpath: xp,
       target: xp,
       targetType: 'xpath',
       tagName: element.tagName.toLowerCase(),
       propertiesName: labelChName || '',
-    
       attributes: attributes
     };
   },
@@ -212,7 +234,166 @@ let _snapshot = {
     };
     // element.value && (attributes.value = element.value);
     attributes.value = element.value || ''
-    this.setAction(element, attributes);
+    return this.setAction(element, attributes);
+  },
+
+  getTreeTriggerInput(element) {
+    if (!element || !element.closest) {
+      return null
+    }
+    const input = element.closest('.el-input')?.querySelector('input:not([type="hidden"]), textarea')
+    if (!input || input.closest('.el-select')) {
+      return null
+    }
+    return input
+  },
+
+  getTreeNodeElement(element) {
+    if (!element || !element.closest) {
+      return null
+    }
+    const tree = element.closest('.el-tree, [role="tree"], .ant-tree, .ivu-tree, .t-tree')
+    if (!tree) {
+      return null
+    }
+    return element.closest('.el-tree-node__content, [role="treeitem"], .ant-tree-node-content-wrapper, .ant-tree-title, .ivu-tree-title, .t-tree__label')
+  },
+
+  isInTreePopup(element) {
+    if (!element || !element.closest) {
+      return false
+    }
+    if (element.closest('.el-tree, [role="tree"], .ant-tree, .ivu-tree, .t-tree')) {
+      return true
+    }
+    const popup = element.closest('.el-popover, .el-popper, .el-dialog, .ant-tree-select-dropdown, .ant-select-dropdown, .ivu-select-dropdown, .t-popup, .t-dialog')
+    return !!popup?.querySelector('.el-tree, [role="tree"], .ant-tree, .ivu-tree, .t-tree')
+  },
+
+  hasVisibleTreePopup() {
+    const trees = document.querySelectorAll('.el-tree, [role="tree"], .ant-tree, .ivu-tree, .t-tree')
+    for (const tree of trees) {
+      if (tree.offsetParent !== null) {
+        return true
+      }
+    }
+    return false
+  },
+
+  getTreeNodeText(treeNode) {
+    const label = treeNode?.querySelector?.('.el-tree-node__label, .ant-tree-title, .ivu-tree-title, .t-tree__label')
+    return (label?.innerText || treeNode?.innerText || '').trim()
+  },
+
+  isTreeLeafNode(treeNode) {
+    const node = treeNode?.closest?.('.el-tree-node, [role="treeitem"], .ant-tree-treenode, .ivu-tree-children li, .t-tree__item')
+    if (!node) {
+      return false
+    }
+
+    const elExpandIcon = node.querySelector('.el-tree-node__expand-icon')
+    if (elExpandIcon) {
+      return elExpandIcon.classList.contains('is-leaf')
+    }
+
+    const ariaExpanded = node.getAttribute('aria-expanded')
+    if (ariaExpanded === 'true' || ariaExpanded === 'false') {
+      return false
+    }
+
+    if (node.querySelector('.ant-tree-switcher:not(.ant-tree-switcher-noop), .ivu-tree-arrow, .t-tree__icon')) {
+      return false
+    }
+
+    return !node.querySelector('.el-tree-node__children, .ant-tree-child-tree, .ivu-tree-children, .t-tree__item')
+  },
+
+  startTreeSelectCandidate(inputElement, action) {
+    if (!inputElement || !action) {
+      return
+    }
+    this.pendingTreeSelect = {
+      id: action.id,
+      target: action.target,
+      inputElement,
+      valueBefore: inputElement.value || '',
+      finalizing: false,
+      timestamp: Date.now()
+    }
+  },
+
+  clearExpiredTreeSelect() {
+    if (this.pendingTreeSelect && Date.now() - this.pendingTreeSelect.timestamp > 15000) {
+      this.pendingTreeSelect = null
+    }
+  },
+
+  shouldIgnoreTreeChange(element) {
+    this.clearExpiredTreeSelect()
+    if (this.lastTreeSelect && Date.now() - this.lastTreeSelect.timestamp > 1000) {
+      this.lastTreeSelect = null
+    }
+    if (this.lastTreeSelect && element === this.lastTreeSelect.inputElement) {
+      return true
+    }
+    const pending = this.pendingTreeSelect
+    if (!pending) {
+      return false
+    }
+    if (this.isInTreePopup(element)) {
+      pending.timestamp = Date.now()
+      return true
+    }
+    return pending.finalizing && element === pending.inputElement
+  },
+
+  handleTreeNodeClick(treeNode) {
+    const pending = this.pendingTreeSelect
+    if (!pending) {
+      return false
+    }
+    pending.timestamp = Date.now()
+    pending.finalizing = true
+    const selectedText = this.getTreeNodeText(treeNode)
+    const isLeafNode = this.isTreeLeafNode(treeNode)
+
+    setTimeout(() => {
+      const inputElement = pending.inputElement
+      const finalValue = (inputElement?.value || '').trim()
+      const popupClosed = !this.hasVisibleTreePopup()
+
+      if (!popupClosed && !isLeafNode) {
+        pending.finalizing = false
+        return
+      }
+      if (!finalValue && !selectedText) {
+        pending.finalizing = false
+        return
+      }
+
+      const actionIndex = this.actions.findIndex(item => item.id === pending.id || item.target === pending.target)
+      if (actionIndex === -1) {
+        this.pendingTreeSelect = null
+        return
+      }
+
+      const action = this.actions[actionIndex]
+      action.command = 'select_tree_option'
+      action.value = finalValue || selectedText
+      if (action.attributes) {
+        action.attributes.value = action.value
+      }
+      this.actions[actionIndex] = action
+      this.lastTreeSelect = {
+        inputElement,
+        timestamp: Date.now()
+      }
+      this.pendingTreeSelect = null
+
+      sendBackMessage('addActionData', action);
+    }, 150)
+
+    return true
   },
 
 
@@ -221,7 +402,7 @@ let _snapshot = {
    * 配置修改动作
    */
   setAction(element, otherParam = {}) {
-    // console.log('---setAction---',element, otherParam);
+    console.log('---setAction---',element, otherParam);
     
     //由于element是对象，因此Map中的key会自动更新
     const id = this.idMap.get(element);
@@ -283,6 +464,7 @@ let _snapshot = {
       this.actions.push(action);//
       //防止跳页和iframe切换问题,将每一步的操作都保存到弹窗页面中
       sendBackMessage('addActionData', action);
+      return action
     }
   },
 
@@ -303,6 +485,9 @@ let _snapshot = {
     //捕获input事件
     this._docu.addEventListener("change", event => {
       const { target } = event;
+      if (this.shouldIgnoreTreeChange(target)) {
+        return
+      }
       // console.log('---input-----',target)
       target.command = 'input'
       target.label = this.getInputLabel(target)
@@ -317,9 +502,19 @@ let _snapshot = {
     this._docu.addEventListener("click", event => {
       const { target } = event;
       // console.log('---click-----',target)
+      this.clearExpiredTreeSelect()
+
+      const treeNodeEle = this.getTreeNodeElement(target)
+      if (treeNodeEle && this.handleTreeNodeClick(treeNodeEle)) {
+        return
+      }
+      if (this.pendingTreeSelect && this.isInTreePopup(target)) {
+        return
+      }
 
       const selectEle = target.closest(".el-select"); //下拉选择框
       const selectOptionEle = target.closest(".el-select-dropdown__item"); //下拉选项
+      const dateIpt = target.closest(".el-date-editor"); //日期选择框
       if(selectEle){
         selectInputEle = selectEle.querySelector('input')
         selectInputEle.command = 'select' 
@@ -334,13 +529,22 @@ let _snapshot = {
 
         // console.log('---selectInputEle-----',selectOptionEle)
         this.setAttributeAction(selectOptionEle);
-      
+      }else if(dateIpt){
+        target.command = 'fill_date_field' 
+        target.commandCnStr = '日期选择'
+        this.setAttributeAction(target)
       }else{
-        target.command = 'click'
-        target.commandCnStr = '点击'
-
-        // console.log('---setAttributeAction-----',target)
-        this.setAttributeAction(target);
+        const treeInputEle = this.getTreeTriggerInput(target)
+        if (treeInputEle) {
+          treeInputEle.command = 'click'
+          treeInputEle.commandCnStr = '点击'
+          const action = this.setAttributeAction(treeInputEle);
+          this.startTreeSelectCandidate(treeInputEle, action)
+        } else if (!target.matches('input, textarea')) {
+          target.command = 'click'
+          target.commandCnStr = '点击'
+          this.setAttributeAction(target);
+        }
       }
       
     }, {

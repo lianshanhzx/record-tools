@@ -53,6 +53,30 @@ const AutoFormFill = {
           }).filter(Boolean)
         }
       }
+      const vnode = selectEl && selectEl.__vnode
+      if (vnode && vnode.component) {
+        const comp = vnode.component
+        const props = comp.props || {}
+        if (props.options && Array.isArray(props.options)) {
+          return props.options.map(o => {
+            if (typeof o === 'string') return o
+            return o.label || o.value || o.text || String(o)
+          }).filter(Boolean)
+        }
+        const proxy = comp.proxy
+        if (proxy && proxy.options && Array.isArray(proxy.options)) {
+          return proxy.options.map(o => {
+            if (typeof o === 'string') return o
+            return o.label || o.value || o.text || String(o)
+          }).filter(Boolean)
+        }
+      }
+    } catch (e) {}
+    try {
+      const items = document.querySelectorAll('.el-select-dropdown__item')
+      if (items.length > 0) {
+        return [...items].map(i => i.textContent.trim()).filter(Boolean)
+      }
     } catch (e) {}
     return []
   },
@@ -64,12 +88,222 @@ const AutoFormFill = {
     t.setAttribute('value', v)
     t.dispatchEvent(new Event('input', { bubbles: true }))
     t.dispatchEvent(new Event('change', { bubbles: true }))
-    t.dispatchEvent(new Event('blur', { bubbles: true }))
+    setTimeout(() => { t.dispatchEvent(new Event('blur', { bubbles: true })) }, 50)
   },
 
-  fillFormField(label, val) {
+  async fillDateField(target, val) {
+    const log = (msg) => console.log('[AutoFill]', msg)
+    log('fillDateField 开始, value: ' + val)
+
+    const dateEditor = target.closest('.el-date-editor, .tsscdatepicker')
+    if (!dateEditor) {
+      this.setNativeValue(target, val)
+      return 'ok-date-dom'
+    }
+
+    const TagProto = target.tagName === 'TEXTAREA' ? HTMLTextAreaElement : HTMLInputElement
+    const setter = Object.getOwnPropertyDescriptor(TagProto.prototype, 'value').set
+    setter.call(target, val)
+    target.setAttribute('value', val)
+    target.dispatchEvent(new Event('input', { bubbles: true }))
+    target.dispatchEvent(new Event('change', { bubbles: true }))
+
+    const formItem = target.closest('.el-form-item')
+    const prop = formItem?.getAttribute('prop') || ''
+    log('el-form-item prop: ' + prop)
+
+    const formEl = target.closest('.el-form')
+    let updated = false
+
+    if (formEl && formEl.__vue__) {
+      try {
+        const formVm = formEl.__vue__
+        const model = formVm.model || formVm.$props?.model
+        if (model && prop) {
+          model[prop] = val
+          if (typeof formVm.validateField === 'function') {
+            try { formVm.validateField(prop) } catch (e) {}
+          }
+          updated = true
+          log('Vue2 el-form model 已更新')
+        }
+        if (!updated && formVm.$data) {
+          for (const key of Object.keys(formVm.$data)) {
+            const v = formVm.$data[key]
+            if (v && typeof v === 'object' && !Array.isArray(v) && prop in v) {
+              v[prop] = val
+              if (typeof formVm.validateField === 'function') {
+                try { formVm.validateField(prop) } catch (e) {}
+              }
+              updated = true
+              log('Vue2 formVm.$data.' + key + '.' + prop + ' 已更新')
+              break
+            }
+          }
+        }
+      } catch (e) {
+        log('Vue2 form 更新异常: ' + e.message)
+      }
+    }
+
+    if (!updated) {
+      log('尝试通过 UI 交互设置日期...')
+
+      const findVisiblePanel = () => {
+        const panels = document.querySelectorAll('.el-picker-panel, .el-date-picker, .el-popper')
+        for (const panel of panels) {
+          const style = window.getComputedStyle(panel)
+          if (style.display !== 'none' && style.visibility !== 'hidden' && panel.offsetParent !== null) {
+            if (panel.querySelector('.el-date-table')) {
+              return panel
+            }
+          }
+        }
+        return null
+      }
+
+      const tryOpenPicker = async () => {
+        const clickTargets = [
+          target,
+          dateEditor.querySelector('.el-icon-date'),
+          dateEditor.querySelector('.el-input__inner'),
+          dateEditor
+        ].filter(Boolean)
+
+        for (let attempt = 0; attempt < 3; attempt++) {
+          for (const clickTarget of clickTargets) {
+            clickTarget.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))
+            clickTarget.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }))
+            clickTarget.click()
+            clickTarget.focus()
+          }
+
+          for (let wait = 0; wait < 5; wait++) {
+            await new Promise(resolve => setTimeout(resolve, 300))
+            const panel = findVisiblePanel()
+            if (panel) {
+              log('选择器面板已打开 (attempt=' + attempt + ', wait=' + wait + ')')
+              return panel
+            }
+          }
+        }
+        return null
+      }
+
+      try {
+        const pickerPanel = await tryOpenPicker()
+
+        if (pickerPanel) {
+          const dateParts = val.split('-')
+          if (dateParts.length === 3) {
+            const targetYear = parseInt(dateParts[0])
+            const targetMonth = parseInt(dateParts[1])
+            const targetDay = parseInt(dateParts[2])
+            log('目标日期: ' + targetYear + '-' + targetMonth + '-' + targetDay)
+
+            const header = pickerPanel.querySelector('.el-date-picker__header')
+            if (header) {
+              const prevYearBtn = header.querySelector('.el-icon-d-arrow-left')
+              const nextYearBtn = header.querySelector('.el-icon-d-arrow-right')
+              const prevMonthBtns = header.querySelectorAll('.el-icon-arrow-left')
+              const nextMonthBtns = header.querySelectorAll('.el-icon-arrow-right')
+              const prevMonthBtn = prevMonthBtns.length > 0 ? prevMonthBtns[prevMonthBtns.length - 1] : null
+              const nextMonthBtn = nextMonthBtns.length > 0 ? nextMonthBtns[nextMonthBtns.length - 1] : null
+
+              const yearLabel = header.querySelectorAll('.el-date-picker__header-label')[0]
+              const monthLabel = header.querySelectorAll('.el-date-picker__header-label')[1]
+
+              if (yearLabel && monthLabel) {
+                let currentYear = parseInt(yearLabel.textContent)
+                let currentMonth = parseInt(monthLabel.textContent)
+                log('当前显示: ' + currentYear + '年 ' + currentMonth + '月')
+
+                let safety = 0
+                while (currentYear > targetYear && prevYearBtn && safety < 50) {
+                  prevYearBtn.click()
+                  currentYear--
+                  safety++
+                  await new Promise(resolve => setTimeout(resolve, 30))
+                }
+                while (currentYear < targetYear && nextYearBtn && safety < 50) {
+                  nextYearBtn.click()
+                  currentYear++
+                  safety++
+                  await new Promise(resolve => setTimeout(resolve, 30))
+                }
+
+                safety = 0
+                while (currentMonth > targetMonth && prevMonthBtn && safety < 12) {
+                  prevMonthBtn.click()
+                  currentMonth--
+                  safety++
+                  await new Promise(resolve => setTimeout(resolve, 30))
+                }
+                while (currentMonth < targetMonth && nextMonthBtn && safety < 12) {
+                  nextMonthBtn.click()
+                  currentMonth++
+                  safety++
+                  await new Promise(resolve => setTimeout(resolve, 30))
+                }
+
+                log('导航到: ' + currentYear + '年 ' + currentMonth + '月')
+              }
+            }
+
+            await new Promise(resolve => setTimeout(resolve, 100))
+
+            const dayCells = pickerPanel.querySelectorAll('.el-date-table td')
+            log('找到 ' + dayCells.length + ' 个日期单元格')
+
+            for (const cell of dayCells) {
+              const cellDay = parseInt(cell.textContent.trim())
+              const isPrevMonth = cell.classList.contains('prev-month')
+              const isNextMonth = cell.classList.contains('next-month')
+              const isDisabled = cell.classList.contains('disabled')
+
+              if (cellDay === targetDay && !isPrevMonth && !isNextMonth && !isDisabled) {
+                log('点击日期: ' + targetDay)
+                cell.click()
+                updated = true
+                await new Promise(resolve => setTimeout(resolve, 200))
+                break
+              }
+            }
+
+            if (!updated) {
+              log('未找到匹配的日期单元格')
+            }
+          }
+        } else {
+          log('未找到日期选择器面板')
+        }
+      } catch (e) {
+        log('UI 交互异常: ' + e.message)
+      }
+    }
+
+    if (!updated) {
+      log('所有策略失败，使用 DOM 直接赋值兜底')
+      setTimeout(() => {
+        target.dispatchEvent(new Event('blur', { bubbles: true }))
+      }, 50)
+      updated = true
+    }
+
+    document.querySelectorAll('.el-picker-panel,.el-date-picker,.el-time-panel').forEach(x => {
+      x.style.display = 'none'
+      x.classList.add('is-hidden')
+    })
+
+    log('fillDateField 完成, updated: ' + updated)
+    return updated ? 'ok-date' : 'ok-date-dom'
+  },
+
+  async fillFormField(label, val) {
+    console.log('[AutoFill] fillFormField 开始, label:', label, 'value:', val)
     const c = this.getContainer()
     const items = c.querySelectorAll('.el-form-item')
+    console.log('[AutoFill] 找到 el-form-item 数量:', items.length)
     for (const item of items) {
       const lbl = item.querySelector('.el-form-item__label')?.textContent?.trim() || ''
       if (lbl !== label) continue
@@ -77,15 +311,10 @@ const AutoFormFill = {
       const textarea = item.querySelector('textarea')
       const target = input || textarea
       if (!target) return 'no-input-found'
-      if (target.disabled || target.readOnly) return 'field-disabled'
       if (target.closest('.el-date-editor, .tsscdatepicker')) {
-        target.focus()
-        this.setNativeValue(target, val)
-        target.blur()
-        try { let vm = target.__vue__; if (vm) { let p = vm.$parent; if (p && p.$options && p.$options.name === 'ElDatePicker') { p.value = val; p.$emit('input', val); p.$emit('change', val) } } } catch (e) {}
-        document.querySelectorAll('.el-picker-panel,.el-date-picker').forEach(x => { x.style.display = 'none'; x.classList.add('is-hidden') })
-        return 'ok-date'
+        return await this.fillDateField(target, val)
       }
+      if (target.disabled || target.readOnly) return 'field-disabled'
       this.setNativeValue(target, val)
       return 'ok'
     }
@@ -97,15 +326,10 @@ const AutoFormFill = {
       const textarea = item.querySelector('textarea')
       const target = input || textarea
       if (!target) return 'no-input-found'
-      if (target.disabled || target.readOnly) return 'field-disabled'
       if (target.closest('.el-date-editor, .tsscdatepicker')) {
-        target.focus()
-        this.setNativeValue(target, val)
-        target.blur()
-        try { let vm = target.__vue__; if (vm) { let p = vm.$parent; if (p && p.$options && p.$options.name === 'ElDatePicker') { p.value = val; p.$emit('input', val); p.$emit('change', val) } } } catch (e) {}
-        document.querySelectorAll('.el-picker-panel,.el-date-picker').forEach(x => { x.style.display = 'none'; x.classList.add('is-hidden') })
-        return 'ok-date'
+        return await this.fillDateField(target, val)
       }
+      if (target.disabled || target.readOnly) return 'field-disabled'
       this.setNativeValue(target, val)
       return 'ok'
     }
@@ -210,6 +434,23 @@ const AutoFormFill = {
     for (const item of items) {
       if (item.textContent.trim().includes(option)) { tryClick(item); return }
     }
+    const scrollable = dropdown.querySelector('.el-select-dropdown__wrap') || dropdown
+    if (scrollable.scrollHeight > scrollable.clientHeight) {
+      scrollable.scrollTop = scrollable.scrollHeight
+      setTimeout(() => {
+        const newItems = dropdown.querySelectorAll('.el-select-dropdown__item')
+        for (const item of newItems) {
+          if (item.textContent.trim() === option) { tryClick(item); return }
+        }
+        for (const item of newItems) {
+          if (item.textContent.trim().includes(option)) { tryClick(item); return }
+        }
+        const hasEmpty = document.querySelector('.el-select-dropdown__empty')
+        if (hasEmpty) { resolve('no-items'); return }
+        resolve('option-not-found:' + [...newItems].map(i => i.textContent.trim()).join(', '))
+      }, 300)
+      return
+    }
     const hasEmpty = document.querySelector('.el-select-dropdown__empty')
     if (hasEmpty) { resolve('no-items'); return }
     resolve('option-not-found:' + [...items].map(i => i.textContent.trim()).join(', '))
@@ -274,8 +515,11 @@ const AutoFormFill = {
 
   normalizeAction(a) {
     const t = (a.action || '').toLowerCase().replace(/[-\s]/g, '_')
-    if (t === 'fill_input' || t === 'fill' || t === 'input' || t === 'fillinput') return { ...a, action: 'fill_input' }
+    if (t === 'fill_input' || t === 'fill' || t === 'input' || t === 'fillinput' || t === 'fill_form_field') return { ...a, action: 'fill_form_field' }
+    if (t === 'fill_date_field' || t === 'fill_date') return { ...a, action: 'fill_date_field' }
+    if (t === 'click_element_by_index' || t === 'click') return { ...a, action: 'click_element_by_index' }
     if (t === 'select_option' || t === 'select' || t === 'option' || t === 'selectoption') return { ...a, action: 'select_option' }
+    if (t === 'select_tree_option') return { ...a, action: 'select_tree_option' }
     return a
   },
 
@@ -321,18 +565,30 @@ const AutoFormFill = {
 
   async executeActions(actions) {
     const results = []
+    console.log('[AutoFill] 开始执行动作，总数:', actions.length)
+    console.log('[AutoFill] 动作列表:', JSON.stringify(actions, null, 2))
     for (let i = 0; i < actions.length; i++) {
       let action = this.normalizeAction(actions[i])
       const { action: type, label, value, option } = action
       let result = 'unknown-action'
       try {
-        if (type === 'fill_input') {
-          result = this.fillFormField(label, value)
+        console.log('[AutoFill] 执行动作 #' + (i + 1) + '/' + actions.length, 'type:', type, 'label:', label, 'value:', value || option)
+        if (type === 'fill_form_field' || type === 'fill_date_field') {
+          result = await this.fillFormField(label, value)
+          console.log('[AutoFill] fillFormField 结果:', result, 'label:', label)
         } else if (type === 'select_option') {
           result = await this.selectOption(label, option || value)
+          console.log('[AutoFill] selectOption 结果:', result, 'label:', label)
+        } else if (type === 'fill_input') {
+          result = await this.fillFormField(label, value)
+          console.log('[AutoFill] fill_input 结果:', result, 'label:', label)
+        } else if (type === 'click_element_by_index') {
+          result = await this.clickButtonForField(label)
+          console.log('[AutoFill] clickButtonForField 结果:', result, 'label:', label)
         }
       } catch (e) {
-        result = `error: ${e.message}`
+        result = 'error: ' + e.message
+        console.error('[AutoFill] 动作执行异常:', e, 'label:', label)
       }
       const val = value || option
       const entry = { index: i + 1, action: type, label, value: val, result }
@@ -340,8 +596,30 @@ const AutoFormFill = {
       chrome.runtime.sendMessage({ type: 'actionProgress', data: entry })
       await new Promise(r => setTimeout(r, 400))
     }
+    console.log('[AutoFill] 全部动作执行完成，结果:', JSON.stringify(results, null, 2))
     return results
-  }
+  },
+
+  async clickButtonForField(label) {
+    const c = this.getContainer()
+    const items = c.querySelectorAll('.el-form-item')
+    let targetItem = null
+    for (const item of items) {
+      const lbl = item.querySelector('.el-form-item__label')?.textContent?.trim() || ''
+      if (lbl === label) { targetItem = item; break }
+    }
+    if (!targetItem) {
+      for (const item of items) {
+        const lbl = item.querySelector('.el-form-item__label')?.textContent?.trim() || ''
+        if (lbl.includes(label)) { targetItem = item; break }
+      }
+    }
+    if (!targetItem) return 'label-not-found'
+    const btn = targetItem.querySelector('button')
+    if (!btn) return 'no-button-found'
+    btn.click()
+    return 'clicked:' + btn.textContent.trim()
+  },
 }
 
 if (typeof module !== 'undefined' && module.exports) {

@@ -37,7 +37,7 @@ function action2Json(actions, url) {
     }]
   };
   if (actions && Array.isArray(actions)) {
-    actions.forEach(action => {
+    actions.filter(action => action.propertiesName).forEach(action => {
       json.tests[0].commands.push(action);
     });
   }

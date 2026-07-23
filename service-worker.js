@@ -250,6 +250,7 @@ function action2Json(actions, url) {
   }
   if (actions) {
     for (var i = 0; i < actions.length; i++) {
+      if (!actions[i].propertiesName) continue
       json.tests[0].commands.push(actions[i])
     }
   }
@@ -303,24 +304,29 @@ chrome.runtime.onMessageExternal.addListener(function(request, sender, sendRespo
 
 const AUTO_FILL_SYSTEM_PROMPT = `你是一个表单填写助手。根据用户指令和当前页面的表单字段列表，返回 JSON 动作数组。
 
-可用动作（只使用以下两种，不要使用其他名称）：
-1. fill_input — 填写输入框，参数 { "action": "fill_input", "label": "字段标签", "value": "要填的值" }
-2. select_option — 选择下拉框，参数 { "action": "select_option", "label": "字段标签", "option": "要选的选项" }
+可用动作（只使用这几种，不要使用其他名称）：
+1. fill_form_field — 填写输入框，参数 { "action": "fill_form_field", "label": "字段标签", "value": "要填的值" }
+2. fill_date_field — 填写日期类型，参数 { "action": "fill_date_field", "label": "字段标签", "value": "要填的值" }
+3. click_element_by_index — 点击元素旁边的按钮（仅用于用户未提供值、需要通过弹窗/选择器选择的情况），参数 { "action": "click_element_by_index", "label": "字段标签" }
+4. select_option — 选中下拉框，参数 { "action": "select_option", "label": "字段标签", "option": "要选的选项" }
+5. select_tree_option — 选中树选择类型，参数 { "action": "select_tree_option", "label": "字段标签", "option": "要选的选项" }
 
-【核心规则】
+【核心规则 — 必须严格遵守】
 1. 对每个字段都必须返回一个动作，动作数量必须等于字段数量（除非 options 为空或已有值或 disabled，见下方规则）
 2. 如果字段已经有值（currentValue 非空），则跳过该字段（不生成动作）
 3. 如果字段 disabled 为 true，则跳过该字段（不生成动作）
-4. 如果字段 hasButton 为 true 且 currentValue 为空，优先点击相邻按钮（选择/获取地址/引入）来填写，而不是直接 fill_input
-5. 用户指定了值的字段，必须使用用户指定的值
-6. 用户未指定的字段，你自主决定
-7. selected 为 true 的字段表示下拉框已有选中值，跳过
-8. kind 为 'radio' 或 'checkbox' 的字段，从 options 中选一个合理的选项
+4. ★★★ 如果用户指令中明确提供了某个字段的值，无论该字段是否有按钮(hasButton)，都必须使用 fill_form_field 直接填写输入框，绝对不要使用 click_element_by_index ★★★
+5. 只有当用户没有提供某个字段的值，且该字段 hasButton 为 true 时，才使用 click_element_by_index 去点击按钮打开选择器
+6. 用户指定了值的字段，必须使用用户指定的值
+7. 用户未指定的字段，你自主决定
+8. selected 为 true 的字段表示下拉框已有选中值，跳过
+9. kind 为 'radio' 或 'checkbox' 的字段，从 options 中选一个合理的选项
 
 【下拉框规则 (Element UI el-select)】
 - select_option 的 option 必须从该字段的 options 列表中选取
 - options 列表是通过 Vue 组件实例读取到的真实选项，不是通过打开下拉框获取的
-- 若 options 列表为空（[]），说明下拉框无法读取选项数据，跳过该字段（不生成动作）
+- 若 options 列表为空（[]），但用户指令中明确提供了该字段的值，仍然生成 select_option 动作，option 使用用户提供的值（系统会尝试打开下拉框并匹配）
+- 若 options 列表为空且用户也未提供值，则跳过该字段（不生成动作）
 
 【输入框规则】
 - 标签包含"姓名"→生成常见中文姓名（如"测试科技张三"）
@@ -340,7 +346,7 @@ const AUTO_FILL_SYSTEM_PROMPT = `你是一个表单填写助手。根据用户�
 示例：
 输入字段：label:"客户名称",kind:input | label:"客户状态",kind:select,options:["正式","潜在"] | label:"证件类型",kind:select,options:["身份证","护照","营业执照"]
 指令：随机填写
-返回：[{"action":"fill_input","label":"客户名称","value":"北京测试科技有限公司"},{"action":"select_option","label":"客户状态","option":"潜在"},{"action":"select_option","label":"证件类型","option":"身份证"}]`
+返回：[{"action":"fill_form_field","label":"客户名称","value":"北京测试科技有限公司"},{"action":"select_option","label":"客户状态","option":"潜在"},{"action":"select_option","label":"证件类型","option":"身份证"}]`
 
 function buildUserPrompt(fields, instruction) {
   let fieldLines = fields.map((f, i) => {
@@ -353,7 +359,7 @@ function buildUserPrompt(fields, instruction) {
     if (f.disabled) line += `, disabled: true`
     if (f.currentValue) line += `, currentValue: "${f.currentValue}"`
     if (f.selected) line += `, selected: true`
-    if (f.hasButton) line += `, hasButton: true (点击按钮选择)`
+    if (f.hasButton) line += `, hasButton: true (该字段旁边有按钮，如"获取地址"，但用户提供了值时应直接填写输入框)`
     return line
   }).join('\n')
   return `当前页面的表单字段：\n${fieldLines}\n\n用户指令：${instruction}`
@@ -378,7 +384,8 @@ async function callLLM(config, fields, instruction) {
       ],
       temperature: config.temperature,
       max_tokens: config.maxTokens,
-      response_format: { type: 'json_object' }
+      response_format: { type: 'json_object' },
+      thinking: { type: config.thinking || 'disabled' }
     })
   })
   if (!response.ok) {
@@ -397,7 +404,7 @@ async function callLLM(config, fields, instruction) {
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === 'callLLM') {
     const { fields, instruction } = message
-    const defaults = { baseUrl: 'https://api.deepseek.com/v1', model: 'deepseek-chat', apiKey: '', temperature: 0.1, maxTokens: 4096 }
+    const defaults = { baseUrl: 'https://api.deepseek.com/v1', model: 'deepseek-v4-flash', apiKey: '', temperature: 0.1, maxTokens: 4096, thinking: 'disabled' }
     chrome.storage.sync.get('atpFormConfig', (res) => {
       const config = Object.assign({}, defaults, res.atpFormConfig || {})
       if (!config.apiKey) {

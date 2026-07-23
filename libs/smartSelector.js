@@ -427,7 +427,7 @@ function getElementsByXPathWithShadow(xpath, root = document) {
 
 function findInDocument(xpath, doc, results) {
   try {
-    const iterator = doc.evaluate(
+    const iterator = document.evaluate(
       xpath,
       doc,
       null,

@@ -175,7 +175,7 @@ function loadFillConfig() {
 		const c = res.atpFormConfig || {}
 		document.getElementById('fillApiKey').value = c.apiKey || ''
 		document.getElementById('fillBaseUrl').value = c.baseUrl || 'https://api.deepseek.com/v1'
-		document.getElementById('fillModel').value = c.model || 'deepseek-chat'
+		document.getElementById('fillModel').value = c.model || 'deepseek-v4-flash'
 	})
 }
 
@@ -307,7 +307,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 		// Search all existing entries by target matching to avoid duplicates
 		const byTarget = target ? recordActionList.findIndex(a => a.target === target) : -1
 		if (byTarget >= 0) {
-			recordActionList[byTarget] = { ...recordActionList[byTarget], value: message.data.value, command: message.data.command, propertiesName: message.data.propertiesName }
+			recordActionList[byTarget] = { ...recordActionList[byTarget], value: message.data.value, command: message.data.command, propertiesName: message.data.propertiesName, action: message.data.action }
 		} else {
 			if (recordActionList.length > 0) {
 				const cnt = computedSamePropertiesName(recordActionList, name)
@@ -336,7 +336,7 @@ $('#clearBtn').click(function () {
 })
 
 $('#downloadBtn').click(function () {
-	saveAsBlobFile(txt2Blob(action2Json(recordInfoLit, recordDataUrl)), 'result.txt')
+	saveAsBlobFile(txt2Blob(action2Json(recordInfoLit, recordDataUrl)), 'result.json')
 })
 
 $('#submitBtn').click(async function () {
@@ -419,10 +419,14 @@ function saveAsBlobFile(blob, name) {
 }
 
 function action2Json(actions, url) {
-	return JSON.stringify({
-		id: uuid(), name: 'test', url,
-		tests: [{ id: uuid(), name: 'test', commands: actions || [] }]
-	})
+    const commands = (actions || []).filter(a => a.propertiesName).map(a => ({
+        ...a,
+        params: { label_text: a.propertiesName, value: a.value || '' }
+    }))
+    return JSON.stringify({
+        id: uuid(), name: 'test', url,
+        tests: [{ id: uuid(), name: 'test', commands }]
+    })
 }
 
 function uuid() {
@@ -435,4 +439,4 @@ function uuid() {
 	return s.join('')
 }
 
-function txt2Blob(content) { return content ? new Blob([content]) : null }
+function txt2Blob(content) { return content ? new Blob([content], { type: 'application/json' }) : null }
