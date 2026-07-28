@@ -231,12 +231,13 @@ let _snapshot = {
     let resolved = false
     let checkCount = 0
     const maxChecks = 150
+    const initialValue = self.getInputValue(inputElement)
 
     const check = () => {
       if (resolved) return
       checkCount++
       const value = self.getInputValue(inputElement)
-      if (value) {
+      if (value && value !== initialValue) {
         resolved = true
         const idx = self.actions.findIndex(a => a.id === action.id)
         if (idx >= 0) {
@@ -333,6 +334,52 @@ let _snapshot = {
     }
 
     return !node.querySelector('.el-tree-node__children, .ant-tree-child-tree, .ivu-tree-children, .t-tree__item')
+  },
+
+  /**
+   * 判断一次点击是否属于“无效空白区域”
+   *
+   * 手动录制时，用户经常会误点到页面中没有实际业务意义的空白容器上。
+   * 这类点击生成的 click 动作在回放时通常找不到有效目标，导致回放失败。
+   * 同时满足以下所有条件时，会被视为无效空白点击并忽略：
+   *   1. 不是 button/a/input 等交互元素，也不在交互元素内部；
+   *   2. 没有可见文本内容；
+   *   3. 没有子元素（即不包含图标、图片等任何可见内容）；
+   *   4. 没有原生 onclick 属性；
+   *   5. 鼠标样式不是 pointer（说明页面没有把它当作可点击元素）。
+   *
+   * 注意：真正的按钮、链接、图标以及已被其它分支处理的组件（如下拉框、
+   * 日期选择器、树形选择器）不会被误判。
+   */
+  isInvalidBlankClick(element) {
+    if (!element) return false
+
+    // 1. 本身属于交互元素或位于交互元素内部（例如按钮内的图标、空白处）
+    const interactiveSelector =
+      'button, a, input, textarea, select, label, details, summary, ' +
+      '[role="button"], [role="link"], [role="tab"], [role="menuitem"], [role="option"], [onclick]'
+    if (element.closest(interactiveSelector)) {
+      return false
+    }
+
+    // 2. 有可见文本、有子元素、或存在原生 onclick，认为是有意义的点击
+    const hasVisibleText = !!(element.innerText || '').trim()
+    const hasChildren = !!(element.children && element.children.length)
+    if (hasVisibleText || hasChildren || element.onclick) {
+      return false
+    }
+
+    // 3. 页面通过 cursor: pointer 提示可点击，同样保留
+    try {
+      if (window.getComputedStyle(element).cursor === 'pointer') {
+        return false
+      }
+    } catch (e) {
+      // 某些特殊元素可能无法获取计算样式，保守起见不当作空白
+      return false
+    }
+
+    return true
   },
 
   startTreeSelectCandidate(inputElement, action) {
@@ -524,6 +571,11 @@ let _snapshot = {
         return
       }
 
+      const datePickerPanel = target.closest('.el-picker-panel, .el-date-picker, .el-date-range-picker, .el-time-panel')
+      if (datePickerPanel) {
+        return
+      }
+
       const selectEle = target.closest(".el-select");
       const selectOptionEle = target.closest(".el-select-dropdown__item");
       const dateIpt = target.closest(".el-date-editor, .tsscdatepicker");
@@ -555,6 +607,10 @@ let _snapshot = {
           const action = this.setAttributeAction(treeInputEle);
           this.startTreeSelectCandidate(treeInputEle, action)
         } else if (!target.matches('input, textarea')) {
+          // 过滤掉空白区域的无效点击，避免把没有业务意义的点击录入动作列表
+          if (this.isInvalidBlankClick(target)) {
+            return
+          }
           target.command = 'click'
           target.commandCnStr = '点击'
           this.setAttributeAction(target);
