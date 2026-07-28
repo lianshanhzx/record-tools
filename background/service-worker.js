@@ -1,4 +1,3 @@
-
 const data = {
   currTabId: '',
   url: ''
@@ -6,38 +5,33 @@ const data = {
 
 let monitorStates = {}
 
-let ty_atp_data = null 
+let ty_atp_data = null
 
-let recordActionList = [] //录制的操作
+let recordActionList = []
 
 chrome.runtime.onInstalled.addListener(() => {
-    console.log("我被安装啦！")
+  console.log("我被安装啦！")
 });
 
 
-//打开弹窗
 async function openOpertePopup(safeLeft) {
-   const windows = await chrome.windows.getAll();
-   const popupExists = windows.some(win => win.type === 'popup');
+  const windows = await chrome.windows.getAll();
+  const popupExists = windows.some(win => win.type === 'popup');
 
-  // let offsetLeft = tab.width - 520 - 60
   let offsetLeft = 100
 
   let opts = {
-    // height: 750,
-    // width: 520,
     height: 500,
     width: 1000,
-    left: offsetLeft, // 设置窗口的初始位置在屏幕的左边100像素处
-    top: safeLeft || 100 ,
+    left: offsetLeft,
+    top: safeLeft || 100,
   };
 
   if (!popupExists) {
-    //如果不存在弹窗,则创建一个弹窗
     chrome.windows.create(
       Object.assign(
         {
-          url: chrome.runtime.getURL('web/index.html'),
+          url: chrome.runtime.getURL('popup/index.html'),
           type: 'popup',
           focused: true,
         },
@@ -46,135 +40,87 @@ async function openOpertePopup(safeLeft) {
     );
   } else {
     console.log('已经有弹窗了')
-    // 可选：将现有弹窗带到前面
     const popup = windows.find(win => win.type === 'popup');
     chrome.windows.update(popup.id, { focused: true });
   }
 }
 
-//停止录制,并将录制的信息发送到弹窗页面
-async function handleStopRecord() { 
-  // let views = chrome.extension.getViews()
+
+async function handleStopRecord() {
   const views = await chrome.windows.getAll();
   if (views && views.length >= 2) {
-    // var popup = views[1]
     const popup = views.find(win => win.type === 'popup');
 
     console.log('popup: ', popup)
-    
-    // let zdhDataStr = localStorage.getItem('ty_zdh_data');
-    // let zdhData = JSON.parse(zdhDataStr)
-    // popup.setZDHdata(zdhData)//设置自动化系统信息
 
-    // popup.getRecorderInfo(message.data,data.url);
-    // popup.getRecorderInfo(recordActionList,data.url);
-    // chrome.tabs.remove(sender.tab.id);
-    // popup.saveAsBlobFile(popup.txt2Blob(action2Json(message.data, data.url)), "result.txt")
     let message = {
-      type: 'getRecorderInfo' , 
-      url:data.url,
-      recordActionList:recordActionList
+      type: 'getRecorderInfo',
+      url: data.url,
+      recordActionList: recordActionList
     }
-    chrome.runtime.sendMessage(popup.id, message, function (response) { 
+    chrome.runtime.sendMessage(popup.id, message, function (response) {
       console.log('---runtime--recordActionList--', response)
-
     })
-
-    // chrome.tabs.sendMessage(popup.id, recordActionList, function (response) {
-    //   if (chrome.runtime.lastError) {
-    //     setTimeout(_send, 500);
-    //     return;
-    //   }
-    //   if (callback)
-    //     callback(response);
-    // });
-
-    //  chrome.tabs.remove(sender.tab.id);
   }
 }
 
 
-//监听消息
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  console.log('---监听消息---',message , sender)
-
+  console.log('---监听消息---', message, sender)
 
   let requestType = message.type;
   if (requestType === "openPopup") {
 
-     chrome.windows.getCurrent((currentWindow) => {
+    chrome.windows.getCurrent((currentWindow) => {
       const popupWidth = 1000;
       const rightMargin = 100;
-        
-      // 计算左侧位置使窗口靠右100px
-      const leftPosition = currentWindow.width + currentWindow.left- popupWidth - rightMargin;
-      
-      // 边界检查，确保不会超出屏幕
+
+      const leftPosition = currentWindow.width + currentWindow.left - popupWidth - rightMargin;
+
       const safeLeft = Math.max(100, leftPosition);
 
-      // console.log('safeLeft: ', safeLeft)
-      // 打开弹出窗口
       openOpertePopup(safeLeft)
     })
   }
- 
+
   if (requestType == 'stopRecord') {
-     console.log('stop Record.....',recordActionList)
-    //  chrome.tabs.remove(sender.tab.id)
-    // handleStopRecord() ; //直接放在index.html 页面中监听 , 后台页面不需要处理了
+    console.log('stop Record.....', recordActionList)
 
     const tabId = sender.tab.id
     delete monitorStates[tabId]
   }
 
-  // if(requestType == 'addActionData'){
-  //   console.log('---addActionData---',message.data)
-  //   recordActionList.push(message.data)
-  // }
-
   if (requestType == 'runRecord') {
 
-    // console.log('run Record.....')
   }
   if (requestType == 'pauseRecord') {
 
-    // console.log('pause Record.....')
   }
   if (requestType == 'checkFlag') {
 
-    // console.log('---checkFlag---',message.url)
-    
     window.open(message.url)
     sendMessageToContentScript({ type: 'start', url: message.url })
   } else if (requestType === 'execute') {
 
-    // console.log('---execute---',requestType)
-    //开始
     data.currTabId = message.tabId
     data.url = message.url
-    recordActionList = [] //开始清掉原来录制的数据
-
-    // if (data.currTabId) {
-    //   chrome.tabs.sendMessage(data.currTabId, { type: 'start' })
-    // }
+    recordActionList = []
 
   } else if (requestType === 'refresh') {
-    // console.log('---refresh---',requestType)
     if (data.currTabId) {
       chrome.tabs.sendMessage(data.currTabId, { type: 'start' })
     }
-  } else if(requestType === 'startRecord'){
-    //开始录制
+  } else if (requestType === 'startRecord') {
     const tabId = sender.tab.id
     monitorStates[tabId] = true
 
-  }else if(requestType === 'initMonitor'){
+  } else if (requestType === 'initMonitor') {
     const tabId = sender.tab.id
-    const tabMonitorStates = monitorStates[tabId] || false 
+    const tabMonitorStates = monitorStates[tabId] || false
 
-    console.log('---initMonitor---',tabMonitorStates)
-    sendResponse({'monitorStates':tabMonitorStates})
-    
+    console.log('---initMonitor---', tabMonitorStates)
+    sendResponse({ 'monitorStates': tabMonitorStates })
+
   }
 
 
@@ -182,46 +128,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 });
 
 
-
-// 如果manifest.json未配置 action.default_popup，点击扩展按钮会触发此事件
 chrome.action.onClicked.addListener(async (tab) => {
   openOpertePopup()
 });
 
 
-
-// chrome.action.onClicked.addListener(async (tab) => {
-//   const windows = await chrome.windows.getAll();
-//   const popupExists = windows.some(win => win.type === 'popup' && win.tabs[0].url.includes('popup.html'));
-  
-//   if (!popupExists) {
-//     chrome.windows.create({
-//       url: "popup.html",
-//       type: "popup",
-//       width: 400,
-//       height: 600
-//     });
-//   } else {
-//     // 可选：将现有弹窗带到前面
-//     const popup = windows.find(win => win.type === 'popup');
-//     chrome.windows.update(popup.id, { focused: true });
-//   }
-// });
-
-
-
-
-/**
- * 获取本地文件地址
- * @param {*} path 
- * @returns 
- */
 function getDataUrl(path) {
   let data = chrome.runtime.getURL(path)
   return data;
 }
 
-// 获取当前选项卡ID
 function getCurrentTabId(callback) {
   chrome.tabs.query({ active: true, currentWindow: true }, function (tabs) {
     if (callback)
@@ -230,11 +146,6 @@ function getCurrentTabId(callback) {
 };
 
 
-/**
- * 将action转换为json
- * @param {*} actions
- * @param url
- */
 function action2Json(actions, url) {
   let json = {
     id: uuid(),
@@ -256,23 +167,19 @@ function action2Json(actions, url) {
   }
   return JSON.stringify(json);
 }
-/**
- * 生成唯一id
- * @returns
- */
+
 function uuid() {
   let s = [];
   let hexDigits = "0123456789abcdef";
   for (let i = 0; i < 36; i++) {
     s[i] = hexDigits.substr(Math.floor(Math.random() * 0x10), 1);
   }
-  s[14] = "4";  // bits 12-15 of the time_hi_and_version field to 0010
-  s[19] = hexDigits.substr((s[19] & 0x3) | 0x8, 1);  // bits 6-7 of the clock_seq_hi_and_reserved to 01
+  s[14] = "4";
+  s[19] = hexDigits.substr((s[19] & 0x3) | 0x8, 1);
   s[8] = s[13] = s[18] = s[23] = "-";
   return s.join("");
 }
 
-// 向标签中的content_script发送消息
 function sendMessageToContentScript(message, callback) {
   getCurrentTabId((tabId) => {
     alert('----向标签中的content_script发送消息-----')
@@ -291,16 +198,15 @@ function sendMessageToContentScript(message, callback) {
 };
 
 
-chrome.runtime.onMessageExternal.addListener(function(request, sender, sendResponse) {
+chrome.runtime.onMessageExternal.addListener(function (request, sender, sendResponse) {
   console.log('---runtime--recordActionList--', request)
-  ty_atp_data = JSON.stringify(request); //保存数据
-  chrome.storage.sync.set({ tyAtpData: ty_atp_data}) 
+  ty_atp_data = JSON.stringify(request);
+  chrome.storage.sync.set({ tyAtpData: ty_atp_data })
 
-  openOpertePopup() //打开弹窗页面
+  openOpertePopup()
 
 });
 
-// ========== 自动填表 LLM 集成 ==========
 
 const AUTO_FILL_SYSTEM_PROMPT = `你是一个表单填写助手。根据用户指令和当前页面的表单字段列表，返回 JSON 动作数组。
 
@@ -418,5 +324,3 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true
   }
 })
-
-

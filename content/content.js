@@ -1,24 +1,10 @@
-// document.addEventListener('click', function(event) {
-//   // 阻止事件冒泡到document，这样可以防止点击其他地方关闭窗口
-//   console.log('event--1111--: ', event)
-//   event.stopPropagation();
-// });
-
-
-
-
-
-chrome.runtime.sendMessage({type: "initMonitor"}, (response) => {
+chrome.runtime.sendMessage({ type: "initMonitor" }, (response) => {
   if (response && response.monitorStates) {
     startRecordEvent()
   }
 })
 
 
-
-/**
- * 监控页面变化
- */
 let url = '';
 ACTION_TYPE_ATTRIBUTE = 'ATTRIBUTE'
 let nameMap = {}
@@ -40,7 +26,7 @@ let _snapshot = {
 
   getActions() {
 
-    console.log('----getActions-----',this.actions)
+    console.log('----getActions-----', this.actions)
     return this.actions
   },
 
@@ -66,7 +52,7 @@ let _snapshot = {
         listenDomList.forEach(item => {
           item.removeAttribute('isonclick')
           item.removeAttribute('isonclicked')
-          item.removeEventListener('click',this.listenerHandle)
+          item.removeEventListener('click', this.listenerHandle)
         })
         listenDomList = []
       }
@@ -99,7 +85,6 @@ let _snapshot = {
   },
 
   getLableValue(element) {
-    // console.log('----element-----',element)
     if (nameMap[currId]) {
       return
     }
@@ -133,11 +118,7 @@ let _snapshot = {
 
     console.log()
   },
-  /**
-   * 序列化
-   * @param {*} parent 
-   * @returns 
-   */
+
   serialization(parent) {
     let element = this.parseElement(parent);
     if (parent.children.length == 0) {
@@ -149,49 +130,43 @@ let _snapshot = {
     });
     return element;
   },
-  /**
-   * 将元素解析成可序列化的对象
-   */
+
   parseElement(element, id) {
     let attributes = {};
     for (const { name, value } of Array.from(element.attributes)) {
       attributes[name] = value;
     }
-    if (!id) {                         //解析新元素才做映射
+    if (!id) {
       id = this.getID();
-      this.idMap.set(element, id);     //元素为键，ID为值
+      this.idMap.set(element, id);
     }
 
     let labelChName = getChineseLabelByElement(element)
 
-    labelChName =  labelChName?.replace(/[^\w\d\u4e00-\u9fa5]/g, '');
-    // let labelChName = getElementLabelName(element)
+    labelChName = labelChName?.replace(/[^\w\d\u4e00-\u9fa5]/g, '');
 
-    //相对路劲xpath
     let xp = new SmartSelector(element).getSelector();
     let actionType = '';
-    
-    console.log('----element--1111---',element ,element.type ,element['command'])
-    
+
+    console.log('----element--1111---', element, element.type, element['command'])
+
     if (element['command'] === 'fill_date_field') {
-        actionType = 'fill_date_field';
-        element['command'] = 'input'
-    }else if (element['command'] === 'input' || element['command'] === 'fill_form_field') {
-       actionType = 'fill_form_field';
+      actionType = 'fill_date_field';
+      element['command'] = 'input'
+    } else if (element['command'] === 'input' || element['command'] === 'fill_form_field') {
+      actionType = 'fill_form_field';
     } else if (element['command'] === 'click') {
-        actionType = 'click_element_by_index';
+      actionType = 'click_element_by_index';
     } else if (element['command'] === 'selectOption' || element['command'] === 'select') {
-        actionType = 'select_option';
+      actionType = 'select_option';
     } else if (element['command'] === 'select_tree_option') {
-        actionType = 'select_tree_option';
+      actionType = 'select_tree_option';
     }
-    
+
     return {
-      // children: [],
       id: id,
-      action:actionType,
+      action: actionType,
       command: element['command'],
-      // xpath: xp,
       target: xp,
       targetType: 'xpath',
       tagName: element.tagName.toLowerCase(),
@@ -199,10 +174,7 @@ let _snapshot = {
       attributes: attributes
     };
   },
-  /**
-   * 生成唯一id
-   * @returns 
-   */
+
   uuid() {
     var s = [];
     var hexDigits = "0123456789abcdef";
@@ -210,8 +182,8 @@ let _snapshot = {
       s[i] = hexDigits.substr(Math.floor(Math.random() * 0x10), 1);
     }
 
-    s[14] = "4";  // bits 12-15 of the time_hi_and_version field to 0010
-    s[19] = hexDigits.substr((s[19] & 0x3) | 0x8, 1);  // bits 6-7 of the clock_seq_hi_and_reserved to 01
+    s[14] = "4";
+    s[19] = hexDigits.substr((s[19] & 0x3) | 0x8, 1);
     s[8] = s[13] = s[18] = s[23] = "-";
 
     var uuid = s.join("");
@@ -219,20 +191,14 @@ let _snapshot = {
 
   },
 
-  /**
-   * 唯一标识
-   */
   getID() {
     return this.uuid();
   },
-  /**
-   * 配置修改属性的动作
-   */
+
   setAttributeAction(element) {
     let attributes = {
       type: ACTION_TYPE_ATTRIBUTE
     };
-    // element.value && (attributes.value = element.value);
     attributes.value = element.value || ''
     return this.setAction(element, attributes);
   },
@@ -398,49 +364,40 @@ let _snapshot = {
 
 
 
-  /**
-   * 配置修改动作
-   */
   setAction(element, otherParam = {}) {
-    console.log('---setAction---',element, otherParam);
-    
-    //由于element是对象，因此Map中的key会自动更新
+    console.log('---setAction---', element, otherParam);
+
     const id = this.idMap.get(element);
     const action = Object.assign(
       this.parseElement(element, id),
       { timestamp: Date.now() },
       otherParam
     );
-    //补丁, 偶尔有些情况下command 会存在于attributes 中 , 暂时找出好的方法, 后面优化
     action.command = action.command || action.attributes.command
-    
+
     currId = action.id
     this.getLableValue(element)
 
 
-    const lastAction = this.actions[this.actions.length - 1] ;
-    if(this.actions.length > 0 && lastAction.command == 'select' && element.command == 'selectOption'){
-      // lastAction.value = element.value
+    const lastAction = this.actions[this.actions.length - 1];
+    if (this.actions.length > 0 && lastAction.command == 'select' && element.command == 'selectOption') {
       let lastEle = null
-      if(lastAction.targetType == 'xpath'){
+      if (lastAction.targetType == 'xpath') {
         lastEle = XPathHelper.$(lastAction.target)
-      }else if(lastAction.targetType == 'css'){
+      } else if (lastAction.targetType == 'css') {
         lastEle = document.querySelector(lastAction.target)
       }
       setTimeout(() => {
-        // console.log('--lastEle-00--',lastEle ,lastEle.value)
-        if(lastEle && lastEle.value){
+        if (lastEle && lastEle.value) {
           lastAction.value = lastEle.value
-            // console.log('--lastEle--111-',lastAction) 
-        }else{
+        } else {
           const selectEle = lastEle.closest(".el-select")
           const multiEles = selectEle.querySelectorAll(".el-select__tags-text")
 
-          // console.log('--multiEles---',multiEles)
           let selectValueArr = []
-          if(multiEles && multiEles.length > 0 ){
+          if (multiEles && multiEles.length > 0) {
             multiEles.forEach(item => {
-              if(item.innerText){
+              if (item.innerText) {
                 selectValueArr.push(item.innerText)
               }
             })
@@ -450,49 +407,37 @@ let _snapshot = {
 
         this.actions[this.actions.length - 1] = lastAction
 
-        // console.log('--lastAction--',lastAction)
-
-        //防止跳页和iframe切换问题,将每一步的操作都保存到弹窗页面中
-       sendBackMessage('addActionData', lastAction);
+        sendBackMessage('addActionData', lastAction);
 
       }, 100);
-     
-    } else{
 
-      // console.log('--22-actions--',action)
+    } else {
 
-      this.actions.push(action);//
-      //防止跳页和iframe切换问题,将每一步的操作都保存到弹窗页面中
+      this.actions.push(action);
       sendBackMessage('addActionData', action);
       return action
     }
   },
 
 
-  //获取input的label
   getInputLabel(input) {
-    // console.log('---getInputLabel------',input);
   },
 
 
 
-  //监听dom变化
   listener(document) {
 
-    console.log('---listener---',document);
+    console.log('---listener---', document);
 
     this._docu = document;
-    //捕获input事件
     this._docu.addEventListener("change", event => {
       const { target } = event;
       if (this.shouldIgnoreTreeChange(target)) {
         return
       }
-      // console.log('---input-----',target)
       target.command = 'input'
       target.label = this.getInputLabel(target)
       target.commandCnStr = '输入'
-      // target.commandCnStrJson = target
       this.setAttributeAction(target);
     }, {
       capture: true
@@ -501,7 +446,6 @@ let _snapshot = {
 
     this._docu.addEventListener("click", event => {
       const { target } = event;
-      // console.log('---click-----',target)
       this.clearExpiredTreeSelect()
 
       const treeNodeEle = this.getTreeNodeElement(target)
@@ -512,28 +456,26 @@ let _snapshot = {
         return
       }
 
-      const selectEle = target.closest(".el-select"); //下拉选择框
-      const selectOptionEle = target.closest(".el-select-dropdown__item"); //下拉选项
-      const dateIpt = target.closest(".el-date-editor"); //日期选择框
-      if(selectEle){
+      const selectEle = target.closest(".el-select");
+      const selectOptionEle = target.closest(".el-select-dropdown__item");
+      const dateIpt = target.closest(".el-date-editor");
+      if (selectEle) {
         selectInputEle = selectEle.querySelector('input')
-        selectInputEle.command = 'select' 
+        selectInputEle.command = 'select'
         selectInputEle.commandCnStr = '下拉框xpath选择'
 
-        // console.log('---selectInputEle-----',selectEle)
         this.setAttributeAction(selectInputEle);
 
-      }else if(selectOptionEle){
+      } else if (selectOptionEle) {
         selectOptionEle.command = 'selectOption'
         selectOptionEle.commandCnStr = '下拉框xpath选择'
 
-        // console.log('---selectInputEle-----',selectOptionEle)
         this.setAttributeAction(selectOptionEle);
-      }else if(dateIpt){
-        target.command = 'fill_date_field' 
+      } else if (dateIpt) {
+        target.command = 'fill_date_field'
         target.commandCnStr = '日期选择'
         this.setAttributeAction(target)
-      }else{
+      } else {
         const treeInputEle = this.getTreeTriggerInput(target)
         if (treeInputEle) {
           treeInputEle.command = 'click'
@@ -546,7 +488,7 @@ let _snapshot = {
           this.setAttributeAction(target);
         }
       }
-      
+
     }, {
       capture: true
     });
@@ -557,21 +499,17 @@ let _snapshot = {
 
 
 
-
-//开始录制
 function startRecordEvent() {
   const startUrl = window.location.href;
   sendBackMessage('startRecord', startUrl);
   _snapshot.listener(document)
 }
 
-//继续录制
 function continueRecordEvent() {
   _snapshot.listener(document)
 }
 
-//暂停录制
-function pauseRecordEvent(){
+function pauseRecordEvent() {
   const actions = _snapshot.getActions().map(item => {
     return {
       ...item,
@@ -582,7 +520,6 @@ function pauseRecordEvent(){
   sendBackMessage('stopRecord', actions);
 }
 
-//停止录制
 function stopRecordEvent() {
   const actions = _snapshot.getActions().map(item => {
     return {
@@ -595,11 +532,6 @@ function stopRecordEvent() {
 }
 
 
-/**
- * 发信息给后台
- * @param {*} _type 
- * @param {*} data 
- */
 function sendBackMessage(_type, data) {
   chrome.runtime.sendMessage({ type: _type, data: data, url: url }, (response) => {
   });
@@ -607,9 +539,6 @@ function sendBackMessage(_type, data) {
 
 
 
-/**
- * 监听后端发送的数据
- */
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.type === 'start' || request.type === 'startRecording') {
     startRecordEvent();
@@ -653,7 +582,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
           let xpath = ''
           const el = AutoFormFill.findElementByLabel(r.label, r.action)
           if (el && typeof SmartSelector !== 'undefined') {
-            try { xpath = new SmartSelector(el).getSelector() } catch (e) {}
+            try { xpath = new SmartSelector(el).getSelector() } catch (e) { }
           }
           chrome.runtime.sendMessage({
             type: 'addActionData',
@@ -678,14 +607,6 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
 })
 
-// chrome.runtime.onMessage.addListener(function (request, sender, sendResponse) {
-//   // listenDomMessage();
-//   if (request.type === 'start') {
-
-//   }
-//   sendResponse('received')
-//   // listenBackMessage();
-// })
 document.addEventListener('DOMContentLoaded', function () {
   console.log('DOMContentLoaded')
 })
@@ -693,21 +614,3 @@ document.addEventListener('DOMContentLoaded', function () {
 window.onload = () => {
   sendBackMessage('refresh', {})
 }
-
-
-
- 
-
-// function listenDomMessage(){
-//     window.addEventListener("message", function(e){
-//         if(e.data&&e.data.type){
-//             sendBackMessage(e.data.type, _snapshot.getActions());
-//         }
-//     }, false);
-// }
-
-// function listenBackMessage(){
-//     chrome.runtime.onMessage.addListener(function(message, sender, sendResponse) {
-//         sendResponse('received')
-//     })
-// }

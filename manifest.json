@@ -12,13 +12,13 @@
         "128": "/icons/128.png"
     },
     "background": {
-        "service_worker": "service-worker.js"
-    }, 
+        "service_worker": "background/service-worker.js"
+    },
     "content_scripts": [
         {
         "matches": ["<all_urls>"],
-        "js": ["/libs/autoFormFill.js", "/libs/smartSelector.js" ,"/libs/elementBusinessName.js","/libs/getLabel.js", "libs/myXPathHelper.js" ,"/setting/content.js" ],
-        "css": ["/setting/content.css"]
+        "js": ["/libs/autoFormFill.js", "/libs/smartSelector.js" ,"/libs/elementBusinessName.js","/libs/getLabel.js", "libs/myXPathHelper.js" ,"/content/content.js" ],
+        "css": ["/content/content.css"]
         }
     ],
     "action": { 

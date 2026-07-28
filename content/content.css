@@ -1,0 +1,5 @@
+#extension-float-button:hover {
+  position: fixed;
+  transform: scale(1.5) translateX(-20px);
+  transition: transform 0.2s;
+}
