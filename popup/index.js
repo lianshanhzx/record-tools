@@ -48,7 +48,7 @@ async function sendToContent(tabId, message) {
         }
         await chrome.scripting.executeScript({
           target: { tabId },
-          files: ['/libs/autoFormFill.js', '/libs/smartSelector.js', '/libs/elementBusinessName.js', '/libs/getLabel.js', '/libs/myXPathHelper.js', '/content/content.js']
+          files: ['/libs/autoFormFill.js', '/libs/smartSelector.js', '/libs/elementBusinessName.js', '/libs/myXPathHelper.js', '/content/content.js']
         })
         await new Promise(r => setTimeout(r, 500))
         return await chrome.tabs.sendMessage(tabId, message)

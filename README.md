@@ -32,8 +32,7 @@ record-tools/
 │   ├── smartSelector.js       # 智能 XPath 选择器
 │   ├── myXPathHelper.js       # XPath 辅助工具
 │   ├── autoFormFill.js        # 自动填表核心
-│   ├── elementBusinessName.js # 元素业务名称识别
-│   └── getLabel.js            # 元素可读标签识别
+│   └── elementBusinessName.js # 元素业务名称识别
 ├── icons/                     # 扩展图标
 ├── key.pem                    # 扩展私钥（自行生成）
 └── manifest.json              # Chrome 扩展配置

@@ -14,6 +14,35 @@ function getLabelByFor(element) {
   return label ? label.textContent.trim() : null;
 }
 
+// 判断元素是否是按钮类型（button/a/[role="button"]/el-button 等）
+// 兼容 Element UI 按钮内部子元素（如 span/i）作为点击 target 的场景
+function _isButtonElement(element) {
+  if (!element || !element.tagName) return false
+  const tagName = element.tagName.toLowerCase()
+  if (['button', 'a'].includes(tagName)) return true
+  if (element.getAttribute('role') === 'button') return true
+  const classAttr = element.getAttribute('class') || ''
+  if (/\bel-button\b/.test(classAttr)) return true
+  // 元素位于 button/a/role=button/.el-button 内部
+  if (element.closest && element.closest('button, a, [role="button"], .el-button')) return true
+  return false
+}
+
+// 获取按钮自身的文本名称
+// 若 element 是按钮内部子元素，向上找到真正的按钮再取文本
+function _getButtonOwnName(element) {
+  if (!element) return null
+  let target = element
+  if (element.closest) {
+    target = element.closest('button, a, [role="button"], .el-button') || element
+  }
+  let text = target.textContent ? target.textContent.trim() : ''
+  if (text && text.length >= 1 && text.length <= 30) {
+    return text
+  }
+  return null
+}
+
 // 方法2：查找包裹元素的label
 function getWrappingLabel(element) {
   let label = element.closest('label');
@@ -29,6 +58,15 @@ function getWrappingLabel(element) {
   
   if(formItemContent){ 
     label = formItemContent.querySelector('label')
+    var formItemLabelText = label ? label.textContent.trim() : null
+    if (formItemLabelText && _isButtonElement(element)) {
+      var btnName = _getButtonOwnName(element)
+      if (btnName) {
+        console.log('[业务对象] 按钮在 el-form-item 内，组合名称:', formItemLabelText, '+', btnName)
+        return formItemLabelText + ' ' + btnName
+      }
+    }
+    return formItemLabelText
   }else if(formItemContentnavite){
     label = formItemContentnavite.querySelector('.n-form-item-label__text')
   }

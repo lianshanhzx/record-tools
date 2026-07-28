@@ -195,11 +195,72 @@ let _snapshot = {
     return this.uuid();
   },
 
+  getInputValue(element) {
+    if (!element) return ''
+
+    // 1. 优先使用原生 property descriptor 读取真实值（兼容 Vue/React 等框架）
+    const tagName = element.tagName
+    if (tagName === 'INPUT' || tagName === 'TEXTAREA') {
+      const TagProto = tagName === 'TEXTAREA' ? HTMLTextAreaElement : HTMLInputElement
+      const descriptor = Object.getOwnPropertyDescriptor(TagProto.prototype, 'value')
+      if (descriptor && descriptor.get) {
+        const realValue = descriptor.get.call(element)
+        if (realValue || realValue === 0) return String(realValue)
+      }
+    }
+
+    // 2. 兜底读取 element.value
+    if (element.value || element.value === 0) return String(element.value)
+
+    // 3. 针对 Element UI 日期选择器：尝试从组件实例中读取 value
+    const dateEditor = element.closest('.el-date-editor, .tsscdatepicker')
+    if (dateEditor) {
+      const vm = dateEditor.__vue__ || dateEditor.closest('.tsscdatepicker')?.__vue__
+      if (vm) {
+        const val = vm.value || vm.$data?.value || vm.modelValue || vm.$props?.value
+        if (val || val === 0) return String(val)
+      }
+    }
+
+    return ''
+  },
+
+  monitorDateInput(inputElement, action) {
+    if (!inputElement || !action) return
+    const self = this
+    let resolved = false
+    let checkCount = 0
+    const maxChecks = 150
+
+    const check = () => {
+      if (resolved) return
+      checkCount++
+      const value = self.getInputValue(inputElement)
+      if (value) {
+        resolved = true
+        const idx = self.actions.findIndex(a => a.id === action.id)
+        if (idx >= 0) {
+          self.actions[idx].value = value
+          if (self.actions[idx].attributes) {
+            self.actions[idx].attributes.value = value
+          }
+          sendBackMessage('addActionData', self.actions[idx])
+        }
+        return
+      }
+      if (checkCount < maxChecks) {
+        setTimeout(check, 200)
+      }
+    }
+
+    setTimeout(check, 300)
+  },
+
   setAttributeAction(element) {
     let attributes = {
       type: ACTION_TYPE_ATTRIBUTE
     };
-    attributes.value = element.value || ''
+    attributes.value = this.getInputValue(element)
     return this.setAction(element, attributes);
   },
 
@@ -435,10 +496,17 @@ let _snapshot = {
       if (this.shouldIgnoreTreeChange(target)) {
         return
       }
-      target.command = 'input'
-      target.label = this.getInputLabel(target)
-      target.commandCnStr = '输入'
-      this.setAttributeAction(target);
+      const dateEditor = target.closest('.el-date-editor, .tsscdatepicker')
+      if (dateEditor) {
+        target.command = 'fill_date_field'
+        target.commandCnStr = '日期选择'
+        this.setAttributeAction(target)
+      } else {
+        target.command = 'input'
+        target.label = this.getInputLabel(target)
+        target.commandCnStr = '输入'
+        this.setAttributeAction(target)
+      }
     }, {
       capture: true
     });
@@ -458,7 +526,7 @@ let _snapshot = {
 
       const selectEle = target.closest(".el-select");
       const selectOptionEle = target.closest(".el-select-dropdown__item");
-      const dateIpt = target.closest(".el-date-editor");
+      const dateIpt = target.closest(".el-date-editor, .tsscdatepicker");
       if (selectEle) {
         selectInputEle = selectEle.querySelector('input')
         selectInputEle.command = 'select'
@@ -472,9 +540,13 @@ let _snapshot = {
 
         this.setAttributeAction(selectOptionEle);
       } else if (dateIpt) {
-        target.command = 'fill_date_field'
-        target.commandCnStr = '日期选择'
-        this.setAttributeAction(target)
+        const dateInput = dateIpt.querySelector('input:not([type="hidden"])') || target
+        dateInput.command = 'fill_date_field'
+        dateInput.commandCnStr = '日期选择'
+        const action = this.setAttributeAction(dateInput)
+        if (action) {
+          this.monitorDateInput(dateInput, action)
+        }
       } else {
         const treeInputEle = this.getTreeTriggerInput(target)
         if (treeInputEle) {
