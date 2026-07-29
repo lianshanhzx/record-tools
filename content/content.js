@@ -10,6 +10,7 @@ ACTION_TYPE_ATTRIBUTE = 'ATTRIBUTE'
 let nameMap = {}
 let currId = ''
 let listenDomList = []
+let scannedPageElements = []
 let _snapshot = {
   clickDom: new Set(),
   id: 0,
@@ -630,6 +631,21 @@ let _snapshot = {
 function startRecordEvent() {
   const startUrl = window.location.href;
   sendBackMessage('startRecord', startUrl);
+
+  // 开始录制时扫描页面所有表单元素与按钮元素
+  try {
+    if (typeof PageElementScanner !== 'undefined') {
+      scannedPageElements = PageElementScanner.scan(document)
+      console.log('[PageElementScanner] 扫描完成，共', scannedPageElements.length, '个元素')
+    } else {
+      console.warn('[PageElementScanner] 扫描器未加载')
+      scannedPageElements = []
+    }
+  } catch (e) {
+    console.error('[PageElementScanner] 扫描失败:', e)
+    scannedPageElements = []
+  }
+
   _snapshot.listener(document)
 }
 
@@ -671,6 +687,24 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.type === 'start' || request.type === 'startRecording') {
     startRecordEvent();
     sendResponse({ status: 'started' });
+    return true;
+  }
+  if (request.type === 'getScannedElements') {
+    sendResponse({ elements: scannedPageElements || [] });
+    return true;
+  }
+  if (request.type === 'rescanElements') {
+    try {
+      if (typeof PageElementScanner !== 'undefined') {
+        scannedPageElements = PageElementScanner.scan(document)
+        sendResponse({ status: 'ok', count: scannedPageElements.length, elements: scannedPageElements });
+      } else {
+        sendResponse({ status: 'scanner-not-found', count: 0, elements: [] });
+      }
+    } catch (e) {
+      console.error('[PageElementScanner] 重新扫描失败:', e)
+      sendResponse({ status: 'error', message: e.message, count: 0, elements: [] });
+    }
     return true;
   }
   if (request.type === 'stopRecording') {

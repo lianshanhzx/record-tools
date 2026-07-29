@@ -6,6 +6,19 @@
  * 4. 降级方案：生成层级路径（XPath 格式）
  */
 
+/**
+ * 为 XPath 属性值选择合适的引号。
+ * 优先使用单引号，避免 JSON 序列化后产生转义反斜杠；
+ * 当值中包含单引号时降级为双引号；同时包含两种引号时使用 concat。
+ */
+function quoteXPathValue(value) {
+  const s = String(value);
+  if (s.indexOf("'") === -1) return `'${s}'`;
+  if (s.indexOf('"') === -1) return `"${s}"`;
+  const parts = s.split("'").map(part => `'${part}'`);
+  return `concat(${parts.join(`, "'", `)})`;
+}
+
 class SmartSelector {
   constructor(element) {
     this.element = element;
@@ -65,9 +78,9 @@ class SmartSelector {
         //如上层存在特殊元素,则将上册特殊元素的路径添加到xpath中
         let xpath = this.getUpperSpecialElementXPath(this.element)
         if (attr === 'id') {
-          xpath = xpath + `//*[@id="${value}"]`;
+          xpath = xpath + `//*[@id=${quoteXPathValue(value)}]`;
         } else {
-          xpath = xpath + `//*[@${attr}="${value}"]`;
+          xpath = xpath + `//*[@${attr}=${quoteXPathValue(value)}]`;
         }
         
         if (this.isUniqueXPath(xpath)) {
@@ -91,7 +104,7 @@ class SmartSelector {
         if (value && value.length <= 20){
             //如上层存在特殊元素,则将上册特殊元素的路径添加到xpath中
             let upperXpath = this.getUpperSpecialElementXPath(this.element)
-            const xpath = upperXpath + `//${tagName}[@placeholder="${value}"]`;
+            const xpath = upperXpath + `//${tagName}[@placeholder=${quoteXPathValue(value)}]`;
             if (this.isUniqueXPath(xpath)) return xpath;
         }
       }
@@ -115,7 +128,7 @@ class SmartSelector {
          
         //如上层存在特殊元素,则将上册特殊元素的路径添加到xpath中
         let upperXpath = this.getUpperSpecialElementXPath(this.element)
-        const xpath = upperXpath + `//${tagName}[@${attr}="${value}"]`;
+        const xpath = upperXpath + `//${tagName}[@${attr}=${quoteXPathValue(value)}]`;
         if (this.isUniqueXPath(xpath)) return xpath;
       }
     }
@@ -148,7 +161,7 @@ class SmartSelector {
       let upperXpath = this.getUpperSpecialElementXPath(this.element)
       
       // 精确匹配版本
-      const exactXPath = upperXpath + `//${tagName}[normalize-space()="${text}"]`;
+      const exactXPath = upperXpath + `//${tagName}[normalize-space()=${quoteXPathValue(text)}]`;
       if (this.isUniqueXPath(exactXPath)) return exactXPath;
     }
     return null;
@@ -163,9 +176,9 @@ class SmartSelector {
     const popoverElement = this.element.closest('.el-popover:not(.el-popover_)');
 
     if(dialogElement && dialogElement.style.display !== "none"){
-      return `//div[contains(@class, "el-dialog__wrapper")][not(contains(@style, "display: none"))]`
+      return `//div[contains(@class, 'el-dialog__wrapper')][not(contains(@style, 'display: none'))]`
     }else if(popoverElement && popoverElement.style.display !== "none"){
-      return `//div[contains(@class, "el-popover")][not (contains(@class, "el-popover_"))][not(contains(@style, "display: none"))]`
+      return `//div[contains(@class, 'el-popover')][not (contains(@class, 'el-popover_'))][not(contains(@style, 'display: none'))]`
     }
     return ''
   }
@@ -202,12 +215,12 @@ class SmartSelector {
 
     if(dialogElement && dialogElement.style.display !== "none"){
       // 上层有el-dialog弹窗
-      const dialogElementXpath = `div[contains(@class, "el-dialog__wrapper")][not(contains(@style, "display: none"))]`
+      const dialogElementXpath = `div[contains(@class, 'el-dialog__wrapper')][not(contains(@style, 'display: none'))]`
       this.getUniqueUpperElementXPath(dialogElement ,dialogElementXpath)
       
     }else if(popoverElement && popoverElement.style.display !== "none"){
        // 上层有el-popover弹窗
-      const popoverXpath = `div[contains(@class, "el-popover")][not (contains(@class, "el-popover_"))][not(contains(@style, "display: none"))]`
+      const popoverXpath = `div[contains(@class, 'el-popover')][not (contains(@class, 'el-popover_'))][not(contains(@style, 'display: none'))]`
       this.getUniqueUpperElementXPath(popoverElement ,popoverXpath)
     }
 
@@ -284,7 +297,7 @@ getElementLocator(element) {
         continue;
       }
       
-      return `${tagName}[@${attr}="${value}"]`;
+      return `${tagName}[@${attr}=${quoteXPathValue(value)}]`;
     }
   }
   
@@ -293,7 +306,7 @@ getElementLocator(element) {
   if (!selectElement && element.hasAttribute('placeholder')) {
     const value = element.getAttribute('placeholder');
     if (value && value.length <= 20 && value.trim() !== '') {
-      return `${tagName}[@placeholder="${value}"]`;
+      return `${tagName}[@placeholder=${quoteXPathValue(value)}]`;
     }
   }
 
@@ -303,7 +316,7 @@ getElementLocator(element) {
     if (element.hasAttribute(attr)) {
       const value = element.getAttribute(attr);
       if (value && value.length <= 20 && value.trim() !== '') {
-        return `${tagName}[@${attr}="${value}"]`;
+        return `${tagName}[@${attr}=${quoteXPathValue(value)}]`;
       }
     }
   }
@@ -332,7 +345,7 @@ getElementClassLocator(element){
   if (element.hasAttribute('class')) {
     const value = element.getAttribute('class');
     if (value && value.length <= 20 && value.trim() !== '') {
-      return `${tagName}[@class="${value}"]`;
+      return `${tagName}[@class=${quoteXPathValue(value)}]`;
     }
   }
 
@@ -391,7 +404,7 @@ getElementDefaultLocator(element) {
       if (element.hasAttribute(attr)) {
         const value = element.getAttribute(attr);
         if (value && value.length < 100) {
-          const xpath = `//${tagName}[@${attr}="${value}"]`;
+          const xpath = `//${tagName}[@${attr}=${quoteXPathValue(value)}]`;
           if (this.isUniqueXPath(xpath)) {
             return xpath;
           }

@@ -335,6 +335,30 @@ $('#downloadBtn').click(function () {
   saveAsBlobFile(txt2Blob(action2Json(recordInfoLit, recordDataUrl)), 'result.json')
 })
 
+$('#downloadAllElementsBtn').click(async function () {
+  const tab = await getCurrentTab()
+  if (!tab || !tab.id) { alert('无法获取当前标签页'); return }
+
+  const resp = await sendToContent(tab.id, { type: 'getScannedElements' })
+  if (!resp || !resp.elements || resp.elements.length === 0) {
+    alert('暂无扫描元素，请先点击“开始录制”进行扫描')
+    return
+  }
+
+  const payload = JSON.stringify({
+    id: uuid(),
+    name: 'all-elements',
+    url: recordDataUrl || tab.url || '',
+    scannedAt: Date.now(),
+    elementCount: resp.elements.length,
+    elements: resp.elements
+  }, null, 2)
+
+  const blob = new Blob([payload], { type: 'application/json' })
+  const filename = 'all-elements-' + new Date().getTime() + '.json'
+  saveAsBlobFile(blob, filename)
+})
+
 $('#submitBtn').click(async function () {
   const empty = recordInfoLit.filter(item => !item.propertiesName)
   if (empty.length > 0) { alert('请补充业务对象名称！'); return }
