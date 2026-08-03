@@ -1,4 +1,21 @@
+/**
+ * autoFormFill.js — 自动填表核心模块
+ * 负责扫描 Element UI 表单字段、执行 LLM 返回的填表动作。
+ * 支持输入框、下拉框、日期选择器、单选、多选等字段类型。
+ *
+ * 依赖（由 manifest.json 保证加载顺序）：
+ *   - 无外部依赖，独立运行
+ *
+ * 被调用位置：
+ *   - content/messageHandler.js → onMessage (scanFields / executeActions)
+ */
+
 const AutoFormFill = {
+  /**
+   * 获取当前可见的表单容器（对话框/抽屉/整页）。
+   * 优先查找可见的 el-dialog，其次 el-drawer，最后降级为 document。
+   * 调用位置：autoFormFill.js → scanFields / fillFormField / selectOption / clickButtonForField / findElementByLabel
+   */
   getContainer() {
     for (const d of document.querySelectorAll('.el-dialog'))
       if (d.offsetParent !== null) return d
@@ -7,6 +24,10 @@ const AutoFormFill = {
     return document
   },
 
+  /**
+   * 识别表单项的字段类型（date/select/radio/checkbox/input/unknown）。
+   * 调用位置：autoFormFill.js → scanFields
+   */
   classifyField(item) {
     if (item.querySelector('.el-date-editor, .tsscdatepicker, [class*="date-picker"], [class*="datepicker"]')) return 'date'
     const el = item.querySelector('input:not([type="hidden"])')
@@ -19,12 +40,20 @@ const AutoFormFill = {
     return 'unknown'
   },
 
+  /**
+   * 判断字段是否处于禁用状态。
+   * 调用位置：autoFormFill.js → scanFields
+   */
   isDisabled(inputEl, trigger) {
     if (trigger) return !!trigger.disabled
     if (inputEl) return !!inputEl.disabled
     return false
   },
 
+  /**
+   * 判断字段是否为必填项（通过 class、星号、aria 属性识别）。
+   * 调用位置：autoFormFill.js → scanFields
+   */
   isRequired(item, label) {
     const hasRequiredClass = !!(item.matches('.is-required') || item.querySelector('.el-form-item__label .el-form-item__label--required'))
     const hasAsterisk = /\*/.test(label)
@@ -33,6 +62,10 @@ const AutoFormFill = {
     return hasRequiredClass || hasAsterisk || hasNativeRequired
   },
 
+  /**
+   * 从 Vue 组件实例读取下拉框选项列表（兼容 Vue2/Vue3）。
+   * 调用位置：autoFormFill.js → scanFields
+   */
   readVueOptions(trigger) {
     try {
       const selectEl = trigger.closest('.el-select')
@@ -81,6 +114,11 @@ const AutoFormFill = {
     return []
   },
 
+  /**
+   * 使用原生 property descriptor 设置输入框值（绕过 Vue/React 框架拦截）。
+   * 触发 input/change/blur 事件以通知框架更新状态。
+   * 调用位置：autoFormFill.js → fillFormField / fillDateField
+   */
   setNativeValue(t, v) {
     const TagProto = t.tagName === 'TEXTAREA' ? HTMLTextAreaElement : HTMLInputElement
     const setter = Object.getOwnPropertyDescriptor(TagProto.prototype, 'value').set
@@ -91,6 +129,11 @@ const AutoFormFill = {
     setTimeout(() => { t.dispatchEvent(new Event('blur', { bubbles: true })) }, 50)
   },
 
+  /**
+   * 填写日期类型字段。
+   * 策略：先尝试直接赋值 + 更新 Vue model，失败则通过 UI 交互打开日期选择器并点击目标日期。
+   * 调用位置：autoFormFill.js → fillFormField / executeActions
+   */
   async fillDateField(target, val) {
     const log = (msg) => console.log('[AutoFill]', msg)
     log('fillDateField 开始, value: ' + val)
@@ -299,6 +342,12 @@ const AutoFormFill = {
     return updated ? 'ok-date' : 'ok-date-dom'
   },
 
+  /**
+   * 填写普通表单字段（输入框/文本域）。
+   * 匹配策略：精确 label → 模糊 label → placeholder → type 属性。
+   * 若字段为日期类型，自动委托给 fillDateField 处理。
+   * 调用位置：autoFormFill.js → executeActions
+   */
   async fillFormField(label, val) {
     console.log('[AutoFill] fillFormField 开始, label:', label, 'value:', val)
     const c = this.getContainer()
@@ -352,6 +401,12 @@ const AutoFormFill = {
     return 'label-not-found'
   },
 
+  /**
+   * 选择下拉框选项。
+   * 匹配策略：精确 label → 模糊 label → placeholder。
+   * 点击触发区域打开下拉框，然后调用 _pickOption 选择目标选项。
+   * 调用位置：autoFormFill.js → executeActions
+   */
   selectOption(label, option) {
     return new Promise(resolve => {
       const c = this.getContainer()
@@ -405,6 +460,12 @@ const AutoFormFill = {
     })
   },
 
+  /**
+   * 从下拉框选项列表中选择目标选项（内部辅助方法）。
+   * 支持精确匹配、模糊匹配、"第一个"等特殊指令。
+   * 若选项不可见，尝试滚动下拉列表后重新查找。
+   * 调用位置：autoFormFill.js → selectOption
+   */
   _pickOption(option, resolve) {
     let dropdown = document
     for (const dd of document.querySelectorAll('.el-select-dropdown')) {
@@ -456,6 +517,12 @@ const AutoFormFill = {
     resolve('option-not-found:' + [...items].map(i => i.textContent.trim()).join(', '))
   },
 
+  /**
+   * 扫描当前容器中的所有表单字段，返回字段信息列表。
+   * 包含：label、kind、currentValue、options、placeholder、required、disabled、selected、hasButton。
+   * 对 select 类型字段，自动调用 readVueOptions 读取选项列表。
+   * 调用位置：content/messageHandler.js → onMessage (scanFields)
+   */
   scanFields() {
     const container = this.getContainer()
     const allItems = container.querySelectorAll('.el-form-item')
@@ -513,6 +580,10 @@ const AutoFormFill = {
     return fields
   },
 
+  /**
+   * 规范化 LLM 返回的动作类型，统一映射为标准动作名称。
+   * 调用位置：autoFormFill.js → executeActions
+   */
   normalizeAction(a) {
     const t = (a.action || '').toLowerCase().replace(/[-\s]/g, '_')
     if (t === 'fill_input' || t === 'fill' || t === 'input' || t === 'fillinput' || t === 'fill_form_field') return { ...a, action: 'fill_form_field' }
@@ -523,6 +594,11 @@ const AutoFormFill = {
     return a
   },
 
+  /**
+   * 根据 label 和字段类型查找对应的 DOM 元素。
+   * 匹配策略：精确 label → 模糊 label。
+   * 调用位置：content/messageHandler.js → onMessage (executeActions) 中生成 XPath
+   */
   findElementByLabel(label, kind) {
     const c = this.getContainer()
     const items = c.querySelectorAll('.el-form-item')
@@ -551,6 +627,10 @@ const AutoFormFill = {
     return null
   },
 
+  /**
+   * 生成 UUID v4 字符串（内部使用，与 Utils.uuid 功能相同）。
+   * 调用位置：content/messageHandler.js → onMessage (executeActions) 中生成动作 ID
+   */
   _uuid() {
     const hexDigits = '0123456789abcdef'
     const s = []
@@ -563,6 +643,12 @@ const AutoFormFill = {
     return s.join('')
   },
 
+  /**
+   * 批量执行 LLM 返回的填表动作。
+   * 支持动作类型：fill_form_field / fill_date_field / select_option / click_element_by_index。
+   * 每执行一个动作，通过 chrome.runtime.sendMessage 发送进度通知。
+   * 调用位置：content/messageHandler.js → onMessage (executeActions)
+   */
   async executeActions(actions) {
     const results = []
     console.log('[AutoFill] 开始执行动作，总数:', actions.length)
@@ -600,6 +686,11 @@ const AutoFormFill = {
     return results
   },
 
+  /**
+   * 点击字段旁边的按钮（如"选择"、"获取地址"等）。
+   * 用于用户未提供值、需要通过弹窗/选择器选择的场景。
+   * 调用位置：autoFormFill.js → executeActions
+   */
   async clickButtonForField(label) {
     const c = this.getContainer()
     const items = c.querySelectorAll('.el-form-item')

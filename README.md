@@ -15,27 +15,35 @@
 ```
 record-tools/
 ├── background/
-│   └── service-worker.js      # 后台服务：窗口管理、消息路由、LLM 调用
+│   ├── service-worker.js       # 后台入口：消息路由、全局录制状态标记
+│   ├── popupManager.js         # 弹窗窗口管理（创建/聚焦 popup）
+│   └── llmService.js           # LLM 调用服务（prompt 构建、API 调用）
 ├── content/
-│   ├── content.js             # 内容脚本：录制核心逻辑
-│   └── content.css            # 录制相关页面样式
+│   ├── content.js              # 内容脚本入口：初始化、录制生命周期管理
+│   ├── recorder.js             # 录制核心：状态管理、动作解析、元素值获取
+│   ├── treeSelectHandler.js    # 树形选择器处理（节点识别、弹窗检测）
+│   ├── eventMonitor.js         # 事件监听（change/click 事件注册与分发）
+│   └── messageHandler.js       # 消息通信（content 侧消息收发）
 ├── popup/
-│   ├── index.html             # 弹窗页面
-│   ├── index.js               # 弹窗逻辑：录制控制、列表展示、自动填表、提交
-│   └── index.css              # 弹窗样式
+│   ├── index.html              # 弹窗页面
+│   ├── index.js                # 弹窗入口：录制控制、通信工具、消息分发
+│   ├── autoFill.js             # 自动填表 UI（面板交互、日志、配置管理）
+│   ├── recordManager.js        # 录制数据管理（列表渲染、过滤、编辑）
+│   ├── uploadService.js        # 上传/下载服务（导出 JSON、提交到平台）
+│   └── index.css               # 弹窗样式
 ├── config/
-│   └── config.js              # 全局配置（如接口服务器地址）
-├── shared/
-│   └── utils.js               # 共享工具函数
-├── libs/                      # 第三方/业务库
-│   ├── jquery.js
-│   ├── smartSelector.js       # 智能 XPath 选择器
-│   ├── myXPathHelper.js       # XPath 辅助工具
-│   ├── autoFormFill.js        # 自动填表核心
-│   └── elementBusinessName.js # 元素业务名称识别
-├── icons/                     # 扩展图标
-├── key.pem                    # 扩展私钥（自行生成）
-└── manifest.json              # Chrome 扩展配置
+│   └── config.js               # 全局配置（如接口服务器地址）
+├── libs/                       # 第三方/业务库
+│   ├── jquery.js               # jQuery 库
+│   ├── utils.js                # 通用工具函数（uuid、action2Json、下载等）
+│   ├── smartSelector.js        # 智能 XPath 选择器
+│   ├── myXPathHelper.js        # XPath 辅助工具
+│   ├── autoFormFill.js         # 自动填表核心（字段扫描、动作执行）
+│   ├── elementBusinessName.js  # 元素业务名称识别
+│   └── pageElementScanner.js   # 页面元素扫描器
+├── icons/                      # 扩展图标
+├── key.pem                     # 扩展私钥（自行生成）
+└── manifest.json               # Chrome 扩展配置（Manifest V3）
 ```
 
 ## 安装与加载
@@ -101,28 +109,41 @@ openssl rsa -in private.pem -pubout -out public.pem
 
 ## 主要消息类型
 
-| 消息类型            | 方向               | 说明              |
-| ------------------- | ------------------ | ----------------- |
-| `startRecording`    | popup → content    | 开始录制          |
-| `stopRecording`     | popup → content    | 停止录制          |
-| `pauseRecording`    | popup → content    | 暂停录制          |
-| `continueRecording` | popup → content    | 继续录制          |
-| `addActionData`     | content → popup    | 添加/更新录制动作 |
-| `scanFields`        | popup → content    | 扫描表单字段      |
-| `executeActions`    | popup → content    | 执行自动填表动作  |
-| `callLLM`           | popup → background | 调用 LLM          |
+| 消息类型            | 方向                 | 说明                          |
+| ------------------- | -------------------- | ----------------------------- |
+| `initMonitor`       | content → background | 查询当前标签页录制状态        |
+| `startRecord`       | content → background | 通知开始录制，标记标签页状态  |
+| `stopRecord`        | content → background | 通知停止录制，清除标签页标记  |
+| `startRecording`    | popup → content      | 开始录制                      |
+| `stopRecording`     | popup → content      | 停止录制                      |
+| `pauseRecording`    | popup → content      | 暂停录制                      |
+| `continueRecording` | popup → content      | 继续录制                      |
+| `addActionData`     | content → popup      | 添加/更新录制动作             |
+| `getScannedElements`| popup → content      | 获取开始录制时扫描的页面元素  |
+| `rescanElements`    | popup → content      | 重新扫描页面元素              |
+| `scanFields`        | popup → content      | 扫描表单字段（自动填表）      |
+| `executeActions`    | popup → content      | 执行自动填表动作              |
+| `actionProgress`    | content → popup      | 自动填表单步进度通知          |
+| `actionComplete`    | content → popup      | 自动填表全部完成通知          |
+| `callLLM`           | popup → background   | 调用 LLM 生成填表动作         |
+| `openPopup`         | content → background | 打开录制弹窗                  |
+| `refresh`           | content → background | 页面加载完成后通知恢复状态    |
 
 ## 开发注意事项
 
 - 插件基于 **Chrome Manifest V3**，请使用支持 MV3 的 Chrome 版本
-- 内容脚本通过 `manifest.json` 注入，顺序不可随意调整
+- **content 脚本加载顺序**：`libs/utils.js` → `libs/autoFormFill.js` → `libs/smartSelector.js` → `libs/elementBusinessName.js` → `libs/myXPathHelper.js` → `libs/pageElementScanner.js` → `content/recorder.js` → `content/treeSelectHandler.js` → `content/eventMonitor.js` → `content/messageHandler.js` → `content/content.js`，顺序不可随意调整
+- **background 脚本**：`service-worker.js` 通过 `importScripts()` 加载 `popupManager.js` 和 `llmService.js`
+- **popup 脚本加载顺序**：`config.js` → `jquery.js` → `utils.js` → `recordManager.js` → `autoFill.js` → `uploadService.js` → `index.js`
 - 弹窗页面通过 `chrome.windows.create` 以 `popup` 类型打开
 - 自动填表功能依赖外部 LLM 服务，请确保网络可访问并正确配置 API Key
+- 模块间通过全局对象通信（`Recorder`、`TreeSelectHandler`、`EventMonitor`、`MessageHandler`、`RecordManager`、`AutoFillUI`、`UploadService`、`PopupManager`、`LLMService`），每个函数注释中标注了调用位置
 
-## 设置key固定 extendsID
-1. 通过 openSSL 生成 私钥和公钥 
-2. 将公钥写入mainfest.json 的key里面
-3. 将私钥重命名成key.pem 放在文件里面
+## 设置 key 固定 extensionId
+
+1. 通过 OpenSSL 生成私钥和公钥
+2. 将公钥写入 `manifest.json` 的 `key` 字段
+3. 将私钥重命名为 `key.pem` 放在项目根目录
 4. 加载扩展程序
 
 ## License
