@@ -13,7 +13,36 @@ window.onload = function () {
   main();
   // 调用 popup/autoFill.js → AutoFillUI.init
   AutoFillUI.init()
+  // popup 打开时通知 content script 触发页面扫描
+  notifyPopupOpened()
 }
+
+/**
+ * 通知 content script popup 已打开，触发页面元素扫描。
+ * 调用位置：popup/index.js → window.onload
+ */
+async function notifyPopupOpened() {
+  const tab = await getCurrentTab()
+  if (tab && tab.id) {
+    sendToContent(tab.id, { type: 'popupOpened' })
+  }
+}
+
+/**
+ * 通知 content script popup 即将关闭，停止 DOM 监听并清理扫描结果。
+ * 调用位置：popup/index.js → window.onbeforeunload
+ */
+async function notifyPopupClosed() {
+  const tab = await getCurrentTab()
+  if (tab && tab.id) {
+    chrome.tabs.sendMessage(tab.id, { type: 'popupClosed' }).catch(() => {
+      // 忽略页面不可用的情况
+    })
+  }
+}
+
+// popup 关闭时发送通知（作为 background onRemoved 的兜底）
+window.addEventListener('beforeunload', notifyPopupClosed)
 
 /**
  * HTML 转义工具函数，防止 XSS。
@@ -59,7 +88,7 @@ async function sendToContent(tabId, message) {
         }
         await chrome.scripting.executeScript({
           target: { tabId },
-          files: ['/libs/utils.js', '/libs/autoFormFill.js', '/libs/smartSelector.js', '/libs/elementBusinessName.js', '/libs/myXPathHelper.js', '/libs/pageElementScanner.js', '/content/recorder.js', '/content/treeSelectHandler.js', '/content/eventMonitor.js', '/content/messageHandler.js', '/content/content.js']
+          files: ['/libs/utils.js', '/libs/autoFormFill.js', '/libs/smartSelector.js', '/libs/elementBusinessName.js', '/libs/myXPathHelper.js', '/config/scannerExclude.js', '/libs/pageElementScanner.js', '/content/recorder.js', '/content/treeSelectHandler.js', '/content/eventMonitor.js', '/content/messageHandler.js', '/content/pageElementScannerController.js', '/content/content.js']
         })
         await new Promise(r => setTimeout(r, 500))
         return await chrome.tabs.sendMessage(tabId, message)

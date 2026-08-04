@@ -89,7 +89,7 @@ const RecordManager = {
    * 调用位置：popup/index.js → chrome.runtime.onMessage 监听
    */
   handleMessage(message) {
-    if (message.type !== 'addActionData' && message.type !== 'startRecord') return;
+    if (message.type !== 'addActionData' && message.type !== 'startRecord' && message.type !== 'addScannedElements') return;
     if (message.type === 'addActionData') {
       const target = message.data.target
       const name = message.data.propertiesName
@@ -102,6 +102,26 @@ const RecordManager = {
           if (cnt > 0) message.data.propertiesName = name + '-' + cnt
         }
         this.recordActionList.push(message.data)
+      }
+      this.recordInfoLit = this.filterRecordListData(this.recordActionList)
+      this.currentRecordInfo = {}
+      this.renderRecordList(this.recordInfoLit)
+      this.updateRecordCount()
+    } else if (message.type === 'addScannedElements') {
+      const elements = message.data || []
+      for (const el of elements) {
+        const target = el.target
+        const name = el.propertiesName
+        const byTarget = target ? this.recordActionList.findIndex(a => a.target === target) : -1
+        if (byTarget >= 0) {
+          this.recordActionList[byTarget] = { ...this.recordActionList[byTarget], command: el.command, propertiesName: el.propertiesName, action: el.action }
+        } else {
+          if (this.recordActionList.length > 0) {
+            const cnt = this.computedSamePropertiesName(this.recordActionList, name)
+            if (cnt > 0) el.propertiesName = name + '-' + cnt
+          }
+          this.recordActionList.push(el)
+        }
       }
       this.recordInfoLit = this.filterRecordListData(this.recordActionList)
       this.currentRecordInfo = {}

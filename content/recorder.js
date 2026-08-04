@@ -20,6 +20,7 @@ const Recorder = {
   idMap: new Map(),
   actions: [],
   _docu: null,
+  _dateTimers: [],
 
   /**
    * 获取已录制的动作列表
@@ -63,6 +64,10 @@ const Recorder = {
         })
         this.listenDomList = []
       }
+      this._dateTimers.forEach(clearTimeout)
+      this._dateTimers = []
+      this.actions = []
+      this.idMap.clear()
     } catch (error) {
       console.log(error)
     }
@@ -244,17 +249,16 @@ const Recorder = {
           if (self.actions[idx].attributes) {
             self.actions[idx].attributes.value = value
           }
-          // 调用 content/messageHandler.js 中的 sendBackMessage
           MessageHandler.sendBackMessage('addActionData', self.actions[idx])
         }
         return
       }
       if (checkCount < maxChecks) {
-        setTimeout(check, 200)
+        self._dateTimers.push(setTimeout(check, 200))
       }
     }
 
-    setTimeout(check, 300)
+    self._dateTimers.push(setTimeout(check, 300))
   },
 
   /**

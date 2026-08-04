@@ -20,7 +20,8 @@ chrome.runtime.sendMessage({ type: "initMonitor" }, (response) => {
 // ==================== 录制生命周期函数 ====================
 
 /**
- * 开始录制：通知 popup 当前 URL，扫描页面元素，并注册事件监听。
+ * 开始录制：通知 popup 当前 URL，并注册事件监听。
+ * 页面元素扫描由 PageElementScannerController 在 popup 打开时统一处理。
  * 调用位置：content/messageHandler.js → onMessage (start/startRecording)
  *           content/content.js → initMonitor 回调
  */
@@ -28,19 +29,6 @@ function startRecordEvent() {
   const startUrl = window.location.href;
   // 调用 messageHandler.js → sendBackMessage
   MessageHandler.sendBackMessage('startRecord', startUrl);
-
-  try {
-    if (typeof PageElementScanner !== 'undefined') {
-      Recorder.scannedPageElements = PageElementScanner.scan(document)
-      console.log('[PageElementScanner] 扫描完成，共', Recorder.scannedPageElements.length, '个元素')
-    } else {
-      console.warn('[PageElementScanner] 扫描器未加载')
-      Recorder.scannedPageElements = []
-    }
-  } catch (e) {
-    console.error('[PageElementScanner] 扫描失败:', e)
-    Recorder.scannedPageElements = []
-  }
 
   // 调用 eventMonitor.js → listener
   EventMonitor.listener(document)

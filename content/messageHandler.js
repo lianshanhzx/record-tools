@@ -39,6 +39,14 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     sendResponse({ elements: Recorder.scannedPageElements || [] });
     return true;
   }
+  // popup 关闭 → 移除所有 DOM 监听并清理录制状态，通知 background 清除标记
+  if (request.type === 'popupClosed') {
+    EventMonitor.unlistener()
+    Recorder.destroy()
+    MessageHandler.sendBackMessage('stopRecord', {})
+    sendResponse({ status: 'popupClosed' })
+    return true
+  }
   // 停止录制 → 调用 content.js → stopRecordEvent
   if (request.type === 'stopRecording') {
     stopRecordEvent();

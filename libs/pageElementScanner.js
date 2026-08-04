@@ -80,6 +80,76 @@ const PageElementScanner = (function () {
     return true
   }
 
+  // ==================== 排除规则 ====================
+
+  /**
+   * 获取页面元素扫描器的排除规则配置。
+   * 配置由 config/scannerExclude.js 提供，在 content script 中先于本文件加载。
+   * @returns {Object|null} 排除配置对象，未配置时返回 null
+   */
+  function getExcludeConfig() {
+    if (typeof PageElementScannerExcludeConfig !== 'undefined') return PageElementScannerExcludeConfig
+    return null
+  }
+
+  /**
+   * 判断元素是否位于配置文件中指定的排除区域。
+   *
+   * 判定规则：
+   *   1. 元素自身或其任一祖先命中 excludedSelectors 中的 CSS 选择器，则排除。
+   *   2. 目标元素（targetElement）同样会被检查，确保包装器与其内部真实元素
+   *      只要有一个在排除区域内，就整体跳过。
+   *
+   * @param {Element} element 候选源元素
+   * @param {Element|null} targetElement 解析后的目标元素
+   * @returns {boolean} 是否应被排除
+   */
+  function isExcludedBySelector(element, targetElement) {
+    const cfg = getExcludeConfig()
+    if (!cfg) return false
+    const selectors = cfg.excludedSelectors || []
+    if (!selectors.length) return false
+
+    for (const selector of selectors) {
+      if (!selector) continue
+      try {
+        if (typeof element.closest === 'function' && element.closest(selector)) return true
+        if (targetElement && targetElement !== element && typeof targetElement.closest === 'function' && targetElement.closest(selector)) {
+          return true
+        }
+      } catch (e) {
+        console.warn('[PageElementScanner] 排除选择器无效:', selector, e)
+      }
+    }
+    return false
+  }
+
+  /**
+   * 根据配置的关键词排除元素。
+   *
+   * 匹配字段：propertiesName / label / placeholder / title / value。
+   * 只要任一字段包含 excludedKeywords 中的关键词，即被排除。
+   *
+   * @param {Object} info 扫描元素信息对象
+   * @returns {boolean} 是否应被排除
+   */
+  function isExcludedByKeywords(info) {
+    const cfg = getExcludeConfig()
+    if (!cfg) return false
+    const keywords = cfg.excludedKeywords || []
+    if (!keywords.length) return false
+
+    const texts = [
+      info.propertiesName,
+      info.label,
+      info.placeholder,
+      info.title,
+      info.value
+    ].filter(Boolean)
+
+    return keywords.some(k => k && texts.some(t => t.indexOf(k) !== -1))
+  }
+
   // ==================== 按钮识别 ====================
 
   /**
@@ -428,10 +498,13 @@ const PageElementScanner = (function () {
    *   6. 清理内部临时字段后返回结果数组。
    *
    * @param {Document|Element} root 扫描根节点，不传则默认 document
+   * @param {Object} [options] 扫描选项
+   * @param {boolean} [options.keepRefs=false] 是否保留内部 _sourceElement / _targetElement / _rect 引用
    * @returns {Object[]} 扫描结果数组
    */
-  function scan(root) {
+  function scan(root, options) {
     root = root || document
+    options = options || {}
     const results = []
 
     // seenSources：记录已经处理过的“候选元素”，防止同一候选被重复处理
@@ -457,12 +530,25 @@ const PageElementScanner = (function () {
       if (seenTargets.has(targetElement)) continue
       seenTargets.add(targetElement)
 
+      // 跳过配置文件中标记为排除的区域元素
+      if (isExcludedBySelector(element, targetElement)) continue
+
       // 生成元素信息
       const info = scanElement(element)
+
+      // 根据关键词进一步排除
+      if (isExcludedByKeywords(info)) continue
 
       // 临时保存源元素和目标元素引用，用于后续按位置排序
       info._sourceElement = element
       info._targetElement = targetElement
+
+      // 缓存目标元素位置信息，避免排序时重复调用 getBoundingClientRect
+      try {
+        info._rect = targetElement.getBoundingClientRect()
+      } catch (e) {
+        info._rect = { top: 0, left: 0, width: 0, height: 0 }
+      }
 
       // 只有成功生成 XPath 的元素才保留（SmartSelector 通常都会生成）
       if (info.target) {
@@ -475,8 +561,8 @@ const PageElementScanner = (function () {
     // 这样下载的 JSON 顺序与页面视觉顺序基本一致，方便人工核对。
     results.sort((a, b) => {
       try {
-        const rectA = a._targetElement.getBoundingClientRect()
-        const rectB = b._targetElement.getBoundingClientRect()
+        const rectA = a._rect || { top: 0, left: 0 }
+        const rectB = b._rect || { top: 0, left: 0 }
         if (rectA.top !== rectB.top) return rectA.top - rectB.top
         return rectA.left - rectB.left
       } catch (e) {
@@ -486,10 +572,14 @@ const PageElementScanner = (function () {
 
     // ---- 清理内部临时字段 ----
     // _sourceElement 和 _targetElement 是运行期 DOM 引用，不能序列化到 JSON 中
-    results.forEach(r => {
-      delete r._sourceElement
-      delete r._targetElement
-    })
+    // 当 options.keepRefs 为 true 时保留这些引用，供区域扫描控制器做增量合并。
+    if (!options.keepRefs) {
+      results.forEach(r => {
+        delete r._sourceElement
+        delete r._targetElement
+        delete r._rect
+      })
+    }
 
     return results
   }
