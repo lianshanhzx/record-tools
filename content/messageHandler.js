@@ -39,21 +39,6 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     sendResponse({ elements: Recorder.scannedPageElements || [] });
     return true;
   }
-  // 重新扫描页面元素 → 调用 PageElementScanner.scan
-  if (request.type === 'rescanElements') {
-    try {
-      if (typeof PageElementScanner !== 'undefined') {
-        Recorder.scannedPageElements = PageElementScanner.scan(document)
-        sendResponse({ status: 'ok', count: Recorder.scannedPageElements.length, elements: Recorder.scannedPageElements });
-      } else {
-        sendResponse({ status: 'scanner-not-found', count: 0, elements: [] });
-      }
-    } catch (e) {
-      console.error('[PageElementScanner] 重新扫描失败:', e)
-      sendResponse({ status: 'error', message: e.message, count: 0, elements: [] });
-    }
-    return true;
-  }
   // 停止录制 → 调用 content.js → stopRecordEvent
   if (request.type === 'stopRecording') {
     stopRecordEvent();
@@ -72,22 +57,10 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     sendResponse({ status: 'continued' });
     return true;
   }
-  // 心跳检测
-  if (request.type === 'ping') {
-    sendResponse({ alive: true })
-    return true
-  }
   // 自动填表：扫描表单字段 → 调用 libs/autoFormFill.js → AutoFormFill.scanFields
   if (request.type === 'scanFields') {
     const fields = AutoFormFill.scanFields()
     sendResponse({ fields })
-    return true
-  }
-  // 自动填表：输出日志到页面控制台
-  if (request.type === 'logToConsole') {
-    console.log('[自动填表] ' + request.tag + ' ======')
-    try { console.log(JSON.parse(request.data)); } catch (e) { console.log(request.data); }
-    sendResponse({ ok: true })
     return true
   }
   // 自动填表：执行 LLM 返回的填表动作，并把成功动作追加到录制列表

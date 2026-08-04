@@ -89,6 +89,7 @@ const RecordManager = {
    * 调用位置：popup/index.js → chrome.runtime.onMessage 监听
    */
   handleMessage(message) {
+    if (message.type !== 'addActionData' && message.type !== 'startRecord') return;
     if (message.type === 'addActionData') {
       const target = message.data.target
       const name = message.data.propertiesName

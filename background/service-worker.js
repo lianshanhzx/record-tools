@@ -10,11 +10,10 @@
 importScripts('popupManager.js', 'llmService.js')
 
 // ==================== 全局状态 ====================
-const data = {
-  currTabId: ''
-}
-
 let monitorStates = {}
+
+// 这些消息的目标是 Popup，Background 无需处理，短路返回避免穿透所有分支
+const SKIP_IN_BG = ['addActionData', 'actionProgress', 'actionComplete']
 
 // ==================== 消息路由 ====================
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -22,35 +21,19 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   let requestType = message.type;
 
-  // 打开 popup 弹窗 → 调用 background/popupManager.js → PopupManager.openOpertePopup
-  if (requestType === "openPopup") {
-    chrome.windows.getCurrent((currentWindow) => {
-      const popupWidth = 1000;
-      const rightMargin = 100;
-      const leftPosition = currentWindow.width + currentWindow.left - popupWidth - rightMargin;
-      const safeLeft = Math.max(100, leftPosition);
-      PopupManager.openOpertePopup(safeLeft)
-    })
-  }
+  // 高频广播消息短路返回（目标为 Popup，Background 无需处理）
+  if (SKIP_IN_BG.includes(requestType)) return true
 
   // 停止录制 → 清除该标签页的录制标记
   if (requestType == 'stopRecord') {
     const tabId = sender.tab.id
     delete monitorStates[tabId]
-  }
-
-  if (requestType == 'checkFlag') {
-    window.open(message.url)
-  } else if (requestType === 'execute') {
-    data.currTabId = message.tabId
-  } else if (requestType === 'refresh') {
-    if (data.currTabId) {
-      chrome.tabs.sendMessage(data.currTabId, { type: 'start' })
-    }
   } else if (requestType === 'startRecord') {
+    // 开始录制 → 标记该标签页正在录制
     const tabId = sender.tab.id
     monitorStates[tabId] = true
   } else if (requestType === 'initMonitor') {
+    // 查询录制状态 → 返回标签页是否正在录制
     const tabId = sender.tab.id
     const tabMonitorStates = monitorStates[tabId] || false
     console.log('---initMonitor---', tabMonitorStates)
