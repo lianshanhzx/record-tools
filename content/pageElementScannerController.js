@@ -39,6 +39,8 @@ const PageElementScannerController = (function () {
   let observer = null
   let debounceTimer = null
   let lastScanTime = 0
+  // 在 debounce 窗口内累积所有 mutation 的根节点，避免只扫描最后一次 mutation 的 roots
+  let pendingRoots = []
 
   // 用 targetElement 作为 key，保存完整的扫描信息（含内部 _rect 引用）
   const scannedElementMap = new Map()
@@ -180,12 +182,33 @@ const PageElementScannerController = (function () {
     if (roots.length === 0) return
 
     const allResults = []
+    const actualRoots = []
+
     for (const root of roots) {
       if (!isVisibleElement(root)) continue
-      allResults.push(...scanRoot(root, reason))
+      const results = scanRoot(root, reason)
+
+      if (results.length > 0) {
+        allResults.push(...results)
+        actualRoots.push(root)
+      } else if (root.parentElement &&
+                 root.parentElement !== document.body &&
+                 root.parentElement !== document.documentElement) {
+        const parent = root.parentElement
+        // 避免同一个父节点被多次扫描
+        if (!actualRoots.includes(parent)) {
+          const parentResults = scanRoot(parent, reason)
+          if (parentResults.length > 0) {
+            console.log(`[ScannerController] ${reason} 根节点 ${root.nodeName} 无元素，向上扫描父节点 ${parent.nodeName}，共 ${parentResults.length} 个元素`)
+            allResults.push(...parentResults)
+            actualRoots.push(parent)
+          }
+        }
+      }
     }
 
-    mergeRegionResults(allResults, roots)
+    if (actualRoots.length === 0) return
+    mergeRegionResults(allResults, actualRoots)
     lastScanTime = Date.now()
   }
 
@@ -240,9 +263,17 @@ const PageElementScannerController = (function () {
     // 先清理已从 DOM 移除的元素，避免关闭弹窗后结果仍残留
     removeDisconnectedElements()
 
+    // 在 debounce 窗口内累积所有批次的 roots，避免只扫描最后一批
+    pendingRoots.push(...roots)
+
     clearTimeout(debounceTimer)
     debounceTimer = setTimeout(() => {
-      scanRegions(roots, 'domMutation')
+      // 对累积的所有 roots 做一次去重
+      const uniqueRoots = pendingRoots.filter((root, _, arr) => {
+        return !arr.some(other => other !== root && other.contains(root))
+      })
+      pendingRoots = []
+      scanRegions(uniqueRoots, 'domMutation')
     }, config.debounceMs)
   }
 
@@ -263,6 +294,7 @@ const PageElementScannerController = (function () {
     }
     clearTimeout(debounceTimer)
     debounceTimer = null
+    pendingRoots = []
     console.log('[ScannerController] DOM 观察已停止')
   }
 

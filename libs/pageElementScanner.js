@@ -375,6 +375,18 @@ const PageElementScanner = (function () {
   function collectCandidates(root) {
     const candidates = new Set()
 
+    // 当扫描具体区域（非 document）时，检查 root 自身是否就是表单/按钮元素。
+    // 因为 querySelectorAll 只查后代，会漏掉作为叶子节点直接添加的 form/button。
+    if (root !== document && root.nodeType === Node.ELEMENT_NODE) {
+      if (isFormElement(root)) {
+        candidates.add(root)
+      }
+      const btnRoot = resolveButtonRoot(root)
+      if (btnRoot) {
+        candidates.add(btnRoot)
+      }
+    }
+
     // ---- 表单相关元素 ----
     const formSelectors = [
       'input:not([type="hidden"])', // 原生输入框（同时会命中 el-select / el-date-editor 内部 input）
