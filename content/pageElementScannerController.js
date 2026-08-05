@@ -142,29 +142,13 @@ const PageElementScannerController = (function () {
 
   /**
    * 将区域扫描结果合并到已有结果中。
-   *  - 新增/更新的元素写入 scannedElementMap。
-   *  - 区域内已不存在于本次扫描结果的旧元素会被移除。
+   * 新增/更新的元素写入 scannedElementMap。
+   * 已扫描过的元素不会因后续隐藏/移除而被删除，确保元素列表尽量全面。
    */
   function mergeRegionResults(regionResults, roots) {
-    const foundKeys = new Set()
     regionResults.forEach(info => {
-      foundKeys.add(info._targetElement)
       scannedElementMap.set(info._targetElement, info)
     })
-
-    // 清理区域内已消失或不再可见的元素
-    for (const [key] of scannedElementMap) {
-      if (!key.isConnected) {
-        scannedElementMap.delete(key)
-        continue
-      }
-      for (const root of roots) {
-        if (root.contains(key) && !foundKeys.has(key)) {
-          scannedElementMap.delete(key)
-          break
-        }
-      }
-    }
 
     notifyPopup()
   }
@@ -215,21 +199,11 @@ const PageElementScannerController = (function () {
   // ==================== DOM 变化识别 ====================
 
   /**
-   * 清理已从 DOM 中移除的元素，避免关闭弹窗/移除区域后结果仍保留。
-   */
-  function removeDisconnectedElements() {
-    for (const [key] of scannedElementMap) {
-      if (!key.isConnected) {
-        scannedElementMap.delete(key)
-      }
-    }
-  }
-
-  /**
    * 从 MutationRecord 中提取需要扫描的区域根节点。
    *  - 新增节点：直接取该节点作为区域。
    *  - 属性变化：取变化的目标元素作为区域。
    * 去重规则：如果某个区域被另一个区域包含，则只保留外层区域。
+   * 排除规则：组件自身的弹窗面板（日期面板、下拉选项、树选择面板等）不触发扫描。
    */
   function findAffectedRoots(mutations) {
     const roots = new Set()
@@ -245,9 +219,38 @@ const PageElementScannerController = (function () {
     }
 
     const uniqueRoots = Array.from(roots)
-    return uniqueRoots.filter((root, _, arr) => {
-      return !arr.some(other => other !== root && other.contains(root))
-    })
+    return uniqueRoots
+      .filter((root, _, arr) => {
+        return !arr.some(other => other !== root && other.contains(root))
+      })
+      .filter(root => !isInPopupPanel(root))
+  }
+
+  /**
+   * 判断元素是否位于组件自身的弹窗面板内。
+   * 日期面板、下拉选项面板、树选择面板等出现时不应触发扫描。
+   */
+  function isInPopupPanel(element) {
+    if (!element || typeof element.closest !== 'function') return false
+
+    const panelSelectors = [
+      '.el-picker-panel',            // Element UI 日期/时间选择面板（通用包装器）
+      '.el-select-dropdown',         // Element UI 下拉选项面板（含树选择下拉）
+      '.el-dropdown-menu',           // Element UI 下拉菜单
+      '.el-cascader-panel',          // Element UI 级联选择面板
+      '.el-autocomplete-suggestion', // Element UI 自动补全面板
+      '.el-color-picker__panel',      // Element UI 颜色选择面板
+      '.el-popover',                  // Element UI popover提示框(包括信贷里面的树弹窗)
+    ]
+
+    for (const selector of panelSelectors) {
+      try {
+        if (element.closest(selector) || element.matches(selector)) return true
+      } catch (e) {
+        // 无效选择器跳过
+      }
+    }
+    return false
   }
 
   /**
@@ -259,9 +262,6 @@ const PageElementScannerController = (function () {
 
     const roots = findAffectedRoots(mutations)
     if (roots.length === 0) return
-
-    // 先清理已从 DOM 移除的元素，避免关闭弹窗后结果仍残留
-    removeDisconnectedElements()
 
     // 在 debounce 窗口内累积所有批次的 roots，避免只扫描最后一批
     pendingRoots.push(...roots)

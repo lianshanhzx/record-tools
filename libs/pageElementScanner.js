@@ -150,6 +150,25 @@ const PageElementScanner = (function () {
     return keywords.some(k => k && texts.some(t => t.indexOf(k) !== -1))
   }
 
+  /**
+   * 判断 <a> 标签是否没有文本内容（空标签，如纯图标占位链接）。
+   * 没有内容的 <a> 标签不纳入扫描。
+   */
+  function isEmptyAnchor(element) {
+    if (!element || !element.tagName) return false
+    if (element.tagName.toLowerCase() !== 'a') return false
+    return !(element.innerText || '').trim()
+  }
+
+  /**
+   * 判断是否为下拉框箭头等无实际意义的装饰图标。
+   */
+  function isDecorativeCaret(element) {
+    if (!element || !element.tagName) return false
+    const cls = element.getAttribute('class') || ''
+    return /\bel-select__caret\b/.test(cls)
+  }
+
   // ==================== 按钮识别 ====================
 
   /**
@@ -544,6 +563,12 @@ const PageElementScanner = (function () {
 
       // 跳过配置文件中标记为排除的区域元素
       if (isExcludedBySelector(element, targetElement)) continue
+
+      // 跳过没有文本内容的 <a> 标签（纯图标占位等无意义链接）
+      if (isEmptyAnchor(element)) continue
+
+      // 跳过下拉框图标等无实际意义的装饰元素
+      if (isDecorativeCaret(element)) continue
 
       // 生成元素信息
       const info = scanElement(element)

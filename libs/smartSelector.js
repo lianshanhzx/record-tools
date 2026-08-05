@@ -455,7 +455,7 @@ function findInDocument(xpath, doc, results) {
       }
     }
   } catch (e) {
-    console.warn(`在文档中查找失败:`, e);
+    // console.warn(`在文档中查找失败:`, e);
   }
 }
 
