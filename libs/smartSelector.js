@@ -1,16 +1,14 @@
 /**
  * 智能选择器 (XPath 版本)
- * 1. 优先尝试测试属性和 ID
- * 2. 尝试唯一业务属性
- * 3. 尝试文本内容
- * 4. 降级方案：生成层级路径（XPath 格式）
+ *
+ * 核心策略（参考 XPath 稳定性最佳实践）：
+ * 1. 优先使用元素自身的稳定属性（data-testid / aria-label / name 等）
+ * 2. 向上查找最近的稳定祖先作为"锚点"，构建相对路径
+ * 3. 路径段尽量使用属性而非纯索引
+ * 4. 锚点与路径之间使用 //（后代轴），允许中间结构变化
+ * 5. 避免绝对路径（/html/body/...）和纯索引链
  */
 
-/**
- * 为 XPath 属性值选择合适的引号。
- * 优先使用单引号，避免 JSON 序列化后产生转义反斜杠；
- * 当值中包含单引号时降级为双引号；同时包含两种引号时使用 concat。
- */
 function quoteXPathValue(value) {
   const s = String(value);
   if (s.indexOf("'") === -1) return `'${s}'`;
@@ -19,435 +17,436 @@ function quoteXPathValue(value) {
   return `concat(${parts.join(`, "'", `)})`;
 }
 
+/**
+ * 判断类名是否稳定（非框架动态生成）
+ */
+function isStableClassName(className) {
+  if (!className || className.length < 2) return false;
+  if (/^data-v-/.test(className)) return false;           // Vue scoped
+  if (/^(is-|has-)/.test(className)) return false;        // 状态类
+  if (/[_-]{2}[a-z0-9]{4,}$/i.test(className)) return false; // 随机后缀
+  if (/^\d+$/.test(className)) return false;              // 纯数字
+  return true;
+}
+
+/**
+ * 判断属性值是否为框架动态生成（不应用于定位）
+ */
+function isDynamicValue(value) {
+  if (!value) return true;
+  if (/\d{6,}/.test(value)) return true;                  // 长数字
+  if (/^[a-zA-Z0-9]{12,}$/.test(value)) return true;      // 长哈希
+  if (/^el-id-/.test(value)) return true;                 // Element UI 动态 ID
+  return false;
+}
+
 class SmartSelector {
   constructor(element) {
     this.element = element;
-    // 定义不需要 ID/Class 也能定位的标签（增加语义化权重）
     this.semanticTags = ['button', 'input', 'a', 'img', 'textarea', 'select'];
-    // 常见的测试专用属性列表
+    // 测试属性（最高优先级）
     this.testAttributes = [
-       'id', 'label', 'data-testid', 'data-cy', 'data-test', 'data-qa',
+      'data-testid', 'data-cy', 'data-test', 'data-qa',
+      'aria-label', 'data-track', 'data-field',
+      'id', 'label',
     ];
+    // 业务属性
+    this.usefulAttrs = ['name', 'title', 'alt', 'type', 'role', 'aria-labelledby', 'for', 'href', 'placeholder'];
   }
 
   /**
-   * 主入口：获取最佳 XPath 选择器
+   * 主入口
    */
   getSelector() {
-    // 1. 优先尝试测试属性和 ID (The Gold Standard & Anchors)
+    // 1. 测试属性 / ID
     const idOrTestAttrXPath = this.findUniqueIdOrTestAttrXPath();
-    if (idOrTestAttrXPath) {
-      return idOrTestAttrXPath;
-    }
+    if (idOrTestAttrXPath) return idOrTestAttrXPath;
 
-    // 2. 尝试 placeholder (Placeholder Text , 排除select 框类型下的placeholder ,select框下载elementui 中的placeholder会随值改变)
+    // 2. placeholder
     const uniquePlaceholderXPath = this.findUniquePlaceholderXPath();
-    if (uniquePlaceholderXPath) {
-      return uniquePlaceholderXPath;
-    }
+    if (uniquePlaceholderXPath) return uniquePlaceholderXPath;
 
-    // 3. 尝试唯一业务属性 (Unique Attributes like name, alt)
+    // 3. 业务属性（name/title/aria 等）
     const uniqueAttrXPath = this.findUniqueAttributeXPath();
-    if (uniqueAttrXPath) {
-      return uniqueAttrXPath;
-    }
+    if (uniqueAttrXPath) return uniqueAttrXPath;
 
-    // 4. 尝试文本内容 (Text Content - XPath Only)
+    // 4. 文本内容
     const textXPath = this.findTextXPath();
-    if (textXPath) {
-      return textXPath;
-    }
+    if (textXPath) return textXPath;
 
-    // 5. 降级方案：生成层级路径 (XPath 格式)
+    // 5. 降级：构建相对路径
     return this.getXPathFromElement();
   }
 
-  /**
-   * 阶段一：寻找 ID 或 data-* 属性，生成 XPath
-   */
+  // ==================== 阶段 1-4：直接属性策略 ====================
+
   findUniqueIdOrTestAttrXPath() {
     for (const attr of this.testAttributes) {
-      if (this.element.hasAttribute(attr)) {
-        const value = this.element.getAttribute(attr);
-        
-        // 过滤逻辑：如果包含长数字或看起来像随机哈希，则跳过
-        if (attr === 'id' && (/\d{4,}/.test(value) || /^[a-zA-Z0-9]{10,}$/.test(value) || /^el-id-.*$/.test(value))) {
-          continue;
-        }
+      if (!this.element.hasAttribute(attr)) continue;
+      const value = this.element.getAttribute(attr);
+      if (!value || !value.trim()) continue;
 
-        //如上层存在特殊元素,则将上册特殊元素的路径添加到xpath中
-        let xpath = this.getUpperSpecialElementXPath(this.element)
-        if (attr === 'id') {
-          xpath = xpath + `//*[@id=${quoteXPathValue(value)}]`;
-        } else {
-          xpath = xpath + `//*[@${attr}=${quoteXPathValue(value)}]`;
-        }
-        
-        if (this.isUniqueXPath(xpath)) {
-          return xpath;
-        }
+      if (attr === 'id' && (/\d{4,}/.test(value) || /^[a-zA-Z0-9]{10,}$/.test(value) || /^el-id-/.test(value))) {
+        continue;
       }
+
+      const upperXpath = this.getUpperSpecialElementXPath(this.element);
+      const xpath = upperXpath + `//*[@${attr}=${quoteXPathValue(value)}]`;
+      if (this.isUniqueXPath(xpath)) return xpath;
     }
     return null;
   }
 
-  
-  /**
-   * 阶段二：寻找 placeholder，生成 XPath
-   */
-  findUniquePlaceholderXPath(){
-    const selectElement = this.element.closest(".el-select")
-    if(!selectElement){ 
-      const tagName = this.element.tagName.toLowerCase();
-      if (this.element.hasAttribute('placeholder')) {
-        const value = this.element.getAttribute('placeholder');
-        if (value && value.length <= 20){
-            //如上层存在特殊元素,则将上册特殊元素的路径添加到xpath中
-            let upperXpath = this.getUpperSpecialElementXPath(this.element)
-            const xpath = upperXpath + `//${tagName}[@placeholder=${quoteXPathValue(value)}]`;
-            if (this.isUniqueXPath(xpath)) return xpath;
-        }
-      }
-    }
-    return null;
-  }
+  findUniquePlaceholderXPath() {
+    const selectElement = this.element.closest(".el-select");
+    if (selectElement) return null;
 
-
-
-  /**
-   * 阶段三：寻找 name, class , alt, title, type 等，生成 XPath
-   */
-  findUniqueAttributeXPath() {
-    const usefulAttrs = ['name','title' ,'class' , 'alt', 'type' ];
     const tagName = this.element.tagName.toLowerCase();
-
-    for (const attr of usefulAttrs) {
-      if (this.element.hasAttribute(attr)) {
-        const value = this.element.getAttribute(attr);
-        if (value && value.length > 20) continue;
-         
-        //如上层存在特殊元素,则将上册特殊元素的路径添加到xpath中
-        let upperXpath = this.getUpperSpecialElementXPath(this.element)
-        const xpath = upperXpath + `//${tagName}[@${attr}=${quoteXPathValue(value)}]`;
+    if (this.element.hasAttribute('placeholder')) {
+      const value = this.element.getAttribute('placeholder');
+      if (value && value.length <= 20) {
+        const upperXpath = this.getUpperSpecialElementXPath(this.element);
+        const xpath = upperXpath + `//${tagName}[@placeholder=${quoteXPathValue(value)}]`;
         if (this.isUniqueXPath(xpath)) return xpath;
       }
     }
     return null;
   }
 
+  findUniqueAttributeXPath() {
+    const tagName = this.element.tagName.toLowerCase();
 
+    for (const attr of this.usefulAttrs) {
+      if (!this.element.hasAttribute(attr)) continue;
+      const value = this.element.getAttribute(attr);
+      if (!value || value.length > 30 || !value.trim()) continue;
 
-  /**
-   * 阶段四：文本定位 (XPath)
-   */
+      if (attr === 'href' && tagName !== 'a') continue;
+      if (attr === 'for' && tagName !== 'label') continue;
+      if (attr === 'type' && value.length > 15) continue;
+
+      const upperXpath = this.getUpperSpecialElementXPath(this.element);
+      const xpath = upperXpath + `//${tagName}[@${attr}=${quoteXPathValue(value)}]`;
+      if (this.isUniqueXPath(xpath)) return xpath;
+    }
+    return null;
+  }
+
   findTextXPath() {
     const tagName = this.element.tagName.toLowerCase();
     let text = '';
-    
-    // 尝试获取文本内容
     if (this.element.innerText) {
       text = this.element.innerText.trim();
     } else if (this.element.textContent) {
       text = this.element.textContent.trim();
     }
 
-    // 只有文本比较短，且是交互元素时才使用文本定位
     if (text && text.length <= 20 && text.length > 0) {
-      // 使用 normalize-space 去除多余空格，contains 提高容错
-      // const xpath = `//${tagName}[contains(normalize-space(), "${text}")]`;
-      // if (this.isUniqueXPath(xpath)) return xpath;
-
-      //如上层存在特殊元素,则将上册特殊元素的路径添加到xpath中
-      let upperXpath = this.getUpperSpecialElementXPath(this.element)
-      
-      // 精确匹配版本
+      const upperXpath = this.getUpperSpecialElementXPath(this.element);
       const exactXPath = upperXpath + `//${tagName}[normalize-space()=${quoteXPathValue(text)}]`;
       if (this.isUniqueXPath(exactXPath)) return exactXPath;
     }
     return null;
   }
 
+  // ==================== 阶段 5：相对路径策略 ====================
 
   /**
-   * 检查上层是否存在特殊元素 ,加强唯一xpath的健壮性
-   */
-  getUpperSpecialElementXPath(element) {
-    const dialogElement = this.element.closest(".el-dialog__wrapper")
-    const popoverElement = this.element.closest('.el-popover:not(.el-popover_)');
-
-    if(dialogElement && dialogElement.style.display !== "none"){
-      return `//div[contains(@class, 'el-dialog__wrapper')][not(contains(@style, 'display: none'))]`
-    }else if(popoverElement && popoverElement.style.display !== "none"){
-      return `//div[contains(@class, 'el-popover')][not (contains(@class, 'el-popover_'))][not(contains(@style, 'display: none'))]`
-    }
-    return ''
-  }
-
-
-  //获取上层还有特殊元素 生层的层级xpath路径
-  getUniqueUpperElementXPath(uppperElement ,upperXpath){
-    // const dialogElementXpath = `div[contains(@class, "el-dialog__wrapper")][not(contains(@style, "display: none"))]`
-    let specialObj = {
-      element : uppperElement,
-      specialFatherXPath : `//${upperXpath}`
-    } 
-    if (this.isUniqueXPath(specialObj.specialFatherXPath, specialObj.element)) {
-      const directXPath = this.getXPath(this.element,'' ,specialObj);
-      return  directXPath
-    }else {
-      //当前上级特殊元素定位不唯一,继续向上查到改特殊上级元素的唯一xpath路径
-      const specialFatherXPath = this.getXPath(uppperElement.parentNode, upperXpath);
-      specialObj.specialFatherXPath = specialFatherXPath
-      //找到特殊元素的唯一xpath路径后,再在当前特殊元素下进行目标元素的定位
-      const directXPath = this.getXPath(this.element,'' ,specialObj);
-      return directXPath;
-    }
-
-  }
-
-
-  /**
-   * 从当前元素开始生成层级XPath路径
+   * 降级方案入口：生成相对 XPath
+   * 策略优先级：
+   * 1. 特殊容器（dialog/popover）内的相对路径
+   * 2. 兄弟节点关系定位
+   * 3. 最近稳定祖先锚点 + 相对路径
    */
   getXPathFromElement() {
-    const dialogElement = this.element.closest(".el-dialog__wrapper")
+    // 1. 特殊容器处理
+    const dialogElement = this.element.closest(".el-dialog__wrapper");
     const popoverElement = this.element.closest('.el-popover:not(.el-popover_)');
 
-    if(dialogElement && dialogElement.style.display !== "none"){
-      // 上层有el-dialog弹窗
-      const dialogElementXpath = `div[contains(@class, 'el-dialog__wrapper')][not(contains(@style, 'display: none'))]`
-      this.getUniqueUpperElementXPath(dialogElement ,dialogElementXpath)
-      
-    }else if(popoverElement && popoverElement.style.display !== "none"){
-       // 上层有el-popover弹窗
-      const popoverXpath = `div[contains(@class, 'el-popover')][not (contains(@class, 'el-popover_'))][not(contains(@style, 'display: none'))]`
-      this.getUniqueUpperElementXPath(popoverElement ,popoverXpath)
+    if (dialogElement && dialogElement.style.display !== "none") {
+      const containerXPath = `//div[contains(@class, 'el-dialog__wrapper')][not(contains(@style, 'display: none'))]`;
+      const innerPath = this.buildRelativeXPath(this.element, dialogElement);
+      return `${containerXPath}${innerPath}`;
     }
 
-    // 从目标元素开始，childPath 初始为空
-    return this.getXPath(this.element, '');
+    if (popoverElement && popoverElement.style.display !== "none") {
+      const containerXPath = `//div[contains(@class, 'el-popover')][not(contains(@class, 'el-popover_'))][not(contains(@style, 'display: none'))]`;
+      const innerPath = this.buildRelativeXPath(this.element, popoverElement);
+      return `${containerXPath}${innerPath}`;
+    }
+
+    // 2. 尝试兄弟节点关系定位（如：label[text()='Email']/following-sibling::input）
+    const siblingXPath = this.findSiblingBasedXPath();
+    if (siblingXPath) return siblingXPath;
+
+    // 3. 构建相对路径（从最近稳定锚点出发）
+    return this.buildRelativeXPath(this.element);
   }
 
+  /**
+   * 核心算法：构建相对 XPath
+   *
+   * 从目标元素向上遍历：
+   * - 每一级尝试获取最佳路径段（优先属性，其次稳定类名，最后索引）
+   * - 遇到稳定且唯一的祖先元素时，将其作为锚点，返回 锚点//相对路径
+   * - 使用 //（后代轴）连接，允许中间 DOM 结构变化
+   *
+   * @param {Element} target - 目标元素
+   * @param {Element|null} boundaryElement - 边界元素（如 dialog），到达后停止
+   * @returns {string} 相对 XPath
+   */
+  buildRelativeXPath(target, boundaryElement = null) {
+    const segments = [];
+    let current = target;
 
-
-/**
- * 递归生成元素的 XPath
- * 每级元素优先尝试使用四个规则进行定位
- * 结合已确定的子路径检查唯一性，唯一则停止递归
- * 元素的类定位器 和其他定位器单独分开, 避免路径中存在的类名导致路径过长
- */
-getXPath(element, childPath = '' , specialObj = null) {
-  if (!element || element.nodeType !== Node.ELEMENT_NODE || (specialObj && element === specialObj.element)) {
-    return childPath;
-  }
-  
-  // 1. 获取当前元素的定位器
-  //获取id,label, name,placeholder , title , type ... 等定位器
-  const currentLocator = this.getElementLocator(element);
-  // 获取当前元素的类定位器
-  const currentClassLocator = this.getElementClassLocator(element);
-  
-  // 2. 构建完整路径（当前元素定位器 + 子路径）
-  let fullPath;
-  let fullClassPath;
-  if (childPath === '') {
-    fullPath = currentLocator;
-    fullClassPath = currentClassLocator;
-  } else {
-    fullPath = `${currentLocator}/${childPath}`;
-    fullClassPath = `${currentClassLocator}/${childPath}`;
-  }
-  
-  // 3. 检查路径是否能唯一定位到原始目标元素
-  let currentTestXPath = `//${fullPath}`;
-  let currentClassTestXPath = `//${fullClassPath}`;
-  
-
-  if(specialObj && specialObj.specialFatherXPath){
-    currentTestXPath = `${specialObj.specialFatherXPath}//${fullPath}`;
-    currentClassTestXPath = `${specialObj.specialFatherXPath}//${fullClassPath}`;
-  }
-
-  if (currentTestXPath && this.isUniqueXPath(currentTestXPath, this.element)) {
-    // console.log('路径已唯一，停止递归:', currentTestXPath);
-    return currentTestXPath;
-  }else if(currentClassTestXPath && this.isUniqueXPath(currentClassTestXPath, this.element)){
-    // console.log('--类--路径已唯一，停止递归:', currentClassTestXPath);
-    return currentClassTestXPath;
-  }
-  
-  // 4. 如果不唯一，继续向上递归（添加父元素）
-  return this.getXPath(element.parentNode, fullPath ,specialObj);
-}
-
-
-/**
- * 获取当前元素的定位器（使用四个规则）
- */
-getElementLocator(element) {
-  
-  const tagName = element.tagName.toLowerCase();
-  // 规则1: 尝试测试属性和ID（优先）
-  for (const attr of this.testAttributes) {
-    if (element.hasAttribute(attr)) {
-      const value = element.getAttribute(attr);
-      
-      // 过滤逻辑：如果包含长数字或看起来像随机哈希，则跳过
-      if (attr === 'id' && (/\d{4,}/.test(value) || /^[a-zA-Z0-9]{10,}$/.test(value) || /^el-id-.*$/.test(value))) {
-        continue;
+    while (current && current.nodeType === Node.ELEMENT_NODE) {
+      // 到达边界或文档根，停止
+      if (current === boundaryElement || current === document.body || current === document.documentElement) {
+        break;
       }
-      
+
+      // 对于祖先元素（非目标本身），检查是否为稳定锚点
+      if (current !== target) {
+        const anchorLocator = this.getStableLocator(current);
+        if (anchorLocator) {
+          const anchorXPath = `//${anchorLocator}`;
+          if (this.isUniqueXPath(anchorXPath)) {
+            // 找到稳定锚点，用 // 连接相对路径（允许中间结构变化）
+            const relativePath = segments.join('//');
+            const fullXPath = relativePath ? `${anchorXPath}//${relativePath}` : anchorXPath;
+            if (this.isUniqueXPath(fullXPath, target)) {
+              return fullXPath;
+            }
+          }
+        }
+      }
+
+      // 获取当前元素的最佳路径段
+      const segment = this.getBestPathSegment(current);
+      segments.unshift(segment);
+
+      // 检查当前累积路径是否已唯一（无锚点时的短路径）
+      const currentPath = `//${segments.join('//')}`;
+      if (this.isUniqueXPath(currentPath, target)) {
+        return currentPath;
+      }
+
+      current = current.parentElement;
+    }
+
+    // 到达顶层，返回累积路径
+    return segments.length > 0 ? `//${segments.join('//')}` : `//${target.tagName.toLowerCase()}`;
+  }
+
+  /**
+   * 兄弟节点关系定位
+   * 示例：//label[normalize-space()='Email']/following-sibling::input[1]
+   */
+  findSiblingBasedXPath() {
+    const targetTag = this.element.tagName.toLowerCase();
+    let sibling = this.element.previousElementSibling;
+    let position = 1;
+
+    while (sibling && position <= 3) {
+      // 尝试兄弟节点的文本内容
+      const text = sibling.textContent?.trim();
+      if (text && text.length > 0 && text.length <= 20) {
+        const siblingTag = sibling.tagName.toLowerCase();
+        const xpath = `//${siblingTag}[normalize-space()=${quoteXPathValue(text)}]/following-sibling::${targetTag}[${position}]`;
+        if (this.isUniqueXPath(xpath, this.element)) {
+          return xpath;
+        }
+      }
+
+      // 尝试兄弟节点的稳定属性
+      const siblingLocator = this.getStableLocator(sibling);
+      if (siblingLocator) {
+        const xpath = `//${siblingLocator}/following-sibling::${targetTag}[${position}]`;
+        if (this.isUniqueXPath(xpath, this.element)) {
+          return xpath;
+        }
+      }
+
+      sibling = sibling.previousElementSibling;
+      position++;
+    }
+
+    return null;
+  }
+
+  // ==================== 辅助方法 ====================
+
+  /**
+   * 获取元素的稳定锚点定位器
+   * 仅当元素具有稳定且可能唯一的属性时返回，否则返回 null
+   * 用于在向上遍历过程中识别"锚点"元素
+   */
+  getStableLocator(element) {
+    const tagName = element.tagName.toLowerCase();
+
+    // 1. 测试属性（最高优先级）
+    for (const attr of this.testAttributes) {
+      if (!element.hasAttribute(attr)) continue;
+      const value = element.getAttribute(attr);
+      if (!value || !value.trim()) continue;
+      if (attr === 'id' && isDynamicValue(value)) continue;
       return `${tagName}[@${attr}=${quoteXPathValue(value)}]`;
     }
-  }
-  
-  // 规则2: 尝试placeholder（排除select框）
-  const selectElement = element.closest(".el-select");
-  if (!selectElement && element.hasAttribute('placeholder')) {
-    const value = element.getAttribute('placeholder');
-    if (value && value.length <= 20 && value.trim() !== '') {
-      return `${tagName}[@placeholder=${quoteXPathValue(value)}]`;
-    }
-  }
 
-  // 规则3: 尝试唯一业务属性
-  const usefulAttrs = ['name', 'title', 'alt', 'type'];
-  for (const attr of usefulAttrs) {
-    if (element.hasAttribute(attr)) {
+    // 2. aria / role
+    for (const attr of ['aria-label', 'role']) {
+      if (!element.hasAttribute(attr)) continue;
       const value = element.getAttribute(attr);
-      if (value && value.length <= 20 && value.trim() !== '') {
+      if (value && value.trim() && value.length <= 30) {
         return `${tagName}[@${attr}=${quoteXPathValue(value)}]`;
       }
     }
-  }
 
-  
-  
-  // 规则4: 尝试文本内容
-  // let text = '';
-  // if (element.innerText) {
-  //   text = element.innerText.trim();
-  // } else if (element.textContent) {
-  //   text = element.textContent.trim();
-  // }
-  
-  // if (text && text.length < 20 && text.length > 0) {
-  //   return `${tagName}[normalize-space()="${text}"]`;
-  // }
-  
-  // 如果四个规则都不适用，使用默认的层级定位
-  return this.getElementDefaultLocator(element);
-}
-
-// 获取元素的类定位器
-getElementClassLocator(element){
-  const tagName = element.tagName.toLowerCase();
-  if (element.hasAttribute('class')) {
-    const value = element.getAttribute('class');
-    if (value && value.length <= 20 && value.trim() !== '') {
-      return `${tagName}[@class=${quoteXPathValue(value)}]`;
+    // 3. 语义化元素的 name/title/alt
+    if (this.semanticTags.includes(tagName)) {
+      for (const attr of ['name', 'title', 'alt']) {
+        if (!element.hasAttribute(attr)) continue;
+        const value = element.getAttribute(attr);
+        if (value && value.trim() && value.length <= 30) {
+          return `${tagName}[@${attr}=${quoteXPathValue(value)}]`;
+        }
+      }
     }
+
+    // 4. 其他元素的 name 属性
+    if (element.hasAttribute('name')) {
+      const value = element.getAttribute('name');
+      if (value && value.trim() && value.length <= 30) {
+        return `${tagName}[@name=${quoteXPathValue(value)}]`;
+      }
+    }
+
+    return null;
   }
 
-  return ''
-}
+  /**
+   * 获取元素在路径中的最佳定位段
+   * 优先使用属性，其次是稳定类名，最后是 tag[index]
+   */
+  getBestPathSegment(element) {
+    const tagName = element.tagName.toLowerCase();
 
-/**
- * 获取元素的默认定位器（基于层级位置）
- */
-getElementDefaultLocator(element) {
-  const tagName = element.tagName.toLowerCase();
-  const parent = element.parentNode;
-  
-  if (!parent || parent.nodeType !== Node.ELEMENT_NODE) {
-    return tagName;
-  }
-  
-  // 计算在同类型兄弟节点中的位置
-  const siblings = Array.from(parent.children).filter(child => 
-    child.tagName === element.tagName
-  );
-  
-  if (siblings.length === 1) {
-    return tagName;
-  } else {
+    // 1. 尝试稳定锚点属性
+    const stableLocator = this.getStableLocator(element);
+    if (stableLocator) return stableLocator;
+
+    // 2. 尝试其他有用属性
+    for (const attr of ['type', 'placeholder', 'for', 'href']) {
+      if (!element.hasAttribute(attr)) continue;
+      const value = element.getAttribute(attr);
+      if (!value || !value.trim() || value.length > 30) continue;
+      if (attr === 'href' && tagName !== 'a') continue;
+      if (attr === 'for' && tagName !== 'label') continue;
+      return `${tagName}[@${attr}=${quoteXPathValue(value)}]`;
+    }
+
+    // 3. 尝试稳定类名
+    const classLocators = this.getElementClassLocators(element);
+    if (classLocators.length > 0) {
+      return classLocators[0];
+    }
+
+    // 4. 降级：tag + 同级索引
+    const parent = element.parentElement;
+    if (!parent) return tagName;
+
+    const siblings = Array.from(parent.children).filter(c => c.tagName === element.tagName);
+    if (siblings.length === 1) return tagName;
+
     const index = siblings.indexOf(element) + 1;
     return `${tagName}[${index}]`;
   }
-}
-
-
 
   /**
-   * 辅助：检查 XPath 是否唯一匹配当前元素
+   * 获取元素的稳定类名定位器候选列表
    */
-  isUniqueXPath(xpath , context = document) {
-    try {
+  getElementClassLocators(element) {
+    const tagName = element.tagName.toLowerCase();
+    if (!element.hasAttribute('class')) return [];
 
-      let elementNodeArr = getElementsByXPathWithShadow(xpath)
-      // console.log('----elementNodeArr', xpath ,elementNodeArr.length)
-      return elementNodeArr?.length === 1 ;
-      
+    const classValue = element.getAttribute('class');
+    if (!classValue || !classValue.trim()) return [];
+
+    const classNames = classValue.split(/\s+/).filter(c => c.length > 0);
+    const stableClasses = classNames.filter(isStableClassName);
+
+    if (stableClasses.length === 0) return [];
+
+    const locators = [];
+
+    // 单个稳定类名
+    for (const cls of stableClasses) {
+      locators.push(`${tagName}[contains(@class, ${quoteXPathValue(cls)})]`);
+    }
+
+    // 双类名组合
+    if (stableClasses.length >= 2) {
+      for (let i = 0; i < stableClasses.length - 1; i++) {
+        for (let j = i + 1; j < stableClasses.length; j++) {
+          locators.push(
+            `${tagName}[contains(@class, ${quoteXPathValue(stableClasses[i])})][contains(@class, ${quoteXPathValue(stableClasses[j])})]`
+          );
+        }
+      }
+    }
+
+    return locators;
+  }
+
+  /**
+   * 检查上层是否存在特殊元素（dialog/popover）
+   */
+  getUpperSpecialElementXPath(element) {
+    const dialogElement = element.closest(".el-dialog__wrapper");
+    const popoverElement = element.closest('.el-popover:not(.el-popover_)');
+
+    if (dialogElement && dialogElement.style.display !== "none") {
+      return `//div[contains(@class, 'el-dialog__wrapper')][not(contains(@style, 'display: none'))]`;
+    } else if (popoverElement && popoverElement.style.display !== "none") {
+      return `//div[contains(@class, 'el-popover')][not(contains(@class, 'el-popover_'))][not(contains(@style, 'display: none'))]`;
+    }
+    return '';
+  }
+
+  /**
+   * 检查 XPath 是否唯一匹配当前元素
+   */
+  isUniqueXPath(xpath, context = document) {
+    try {
+      const elementNodeArr = getElementsByXPathWithShadow(xpath);
+      return elementNodeArr?.length === 1;
     } catch (e) {
       console.warn('XPath 解析错误:', e, 'XPath:', xpath);
       return false;
     }
   }
-
-  /**
-   * 生成带有属性的 XPath（备用方法）
-   */
-  generateXPathWithAttributes(element, attributes = []) {
-    const tagName = element.tagName.toLowerCase();
-    
-    for (const attr of attributes) {
-      if (element.hasAttribute(attr)) {
-        const value = element.getAttribute(attr);
-        if (value && value.length < 100) {
-          const xpath = `//${tagName}[@${attr}=${quoteXPathValue(value)}]`;
-          if (this.isUniqueXPath(xpath)) {
-            return xpath;
-          }
-        }
-      }
-    }
-    
-    return null;
-  }
 }
 
+// ==================== XPath 辅助函数 ====================
 
-
-//检查 XPath 是否唯一匹配当前元素
 function getElementsByXPathWithShadow(xpath, root = document) {
   const results = new Set();
-  
-  // 1. 在当前文档中查找
   findInDocument(xpath, root, results);
-  
-  // 2. 查找所有 Shadow DOM
   findAllShadowRoots(root).forEach(shadowRoot => {
     findInDocument(xpath, shadowRoot, results);
   });
-  
-  // 3. 查找所有 iframe
   findAllIframes(root).forEach(iframeDoc => {
     findInDocument(xpath, iframeDoc, results);
   });
-  
   return Array.from(results);
 }
 
 function findInDocument(xpath, doc, results) {
   try {
     const iterator = document.evaluate(
-      xpath,
-      doc,
-      null,
-      XPathResult.ORDERED_NODE_ITERATOR_TYPE,
-      null
+      xpath, doc, null,
+      XPathResult.ORDERED_NODE_ITERATOR_TYPE, null
     );
-    
     let node;
     while (node = iterator.iterateNext()) {
       if (node.nodeType === Node.ELEMENT_NODE && node.isConnected) {
@@ -455,45 +454,36 @@ function findInDocument(xpath, doc, results) {
       }
     }
   } catch (e) {
-    // console.warn(`在文档中查找失败:`, e);
+    // ignore
   }
 }
 
 function findAllShadowRoots(element) {
   const shadowRoots = [];
-  
   function traverse(el) {
-    // 如果元素有 Shadow DOM
     if (el.shadowRoot) {
       shadowRoots.push(el.shadowRoot);
-      // 递归遍历 Shadow DOM 内部
       el.shadowRoot.querySelectorAll('*').forEach(child => traverse(child));
     }
-    
-    // 检查是否有 ::shadow 或 /deep/ 等穿透 Shadow DOM 的元素
     if (el.children) {
       Array.from(el.children).forEach(child => traverse(child));
     }
   }
-  
   traverse(element);
   return shadowRoots;
 }
 
 function findAllIframes(element) {
   const iframeDocs = [];
-  
   element.querySelectorAll('iframe').forEach(iframe => {
     try {
       if (iframe.contentDocument) {
         iframeDocs.push(iframe.contentDocument);
-        // 递归查找 iframe 中的 iframe
         iframeDocs.push(...findAllIframes(iframe.contentDocument));
       }
     } catch (e) {
       // 跨域 iframe，忽略
     }
   });
-  
   return iframeDocs;
 }
