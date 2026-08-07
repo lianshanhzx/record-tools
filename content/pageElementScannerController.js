@@ -341,13 +341,6 @@ const PageElementScannerController = (function () {
 
   function init() {
     initMessageListener()
-
-    // 页面从后台切回前台时，如果 popup 仍打开，补一次全量扫描
-    document.addEventListener('visibilitychange', () => {
-      if (!document.hidden && popupOpen) {
-        fullScan('visibilityChange')
-      }
-    })
   }
 
   // ==================== 暴露接口 ====================
