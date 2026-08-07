@@ -176,8 +176,13 @@ function initRecordControls() {
  */
 function initBottomActions() {
   // 调用 popup/recordManager.js → RecordManager.clearAll
-  $('#clearBtn').click(function () {
+  $('#clearBtn').click(async function () {
     RecordManager.clearAll()
+    // 重录时通知 content script 清空扫描结果并重新全量扫描
+    const tab = await getCurrentTab()
+    if (tab && tab.id) {
+      sendToContent(tab.id, { type: 'clearAndRescan' })
+    }
   })
 
   // 调用 popup/uploadService.js → UploadService.downloadActions

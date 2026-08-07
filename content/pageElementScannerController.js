@@ -125,10 +125,12 @@ const PageElementScannerController = (function () {
 
   /**
    * 全量扫描整个页面。
+   * @param {string} reason 扫描触发原因，用于日志
+   * @param {boolean} force 是否忽略最小扫描间隔强制扫描
    */
-  function fullScan(reason) {
+  function fullScan(reason, force = false) {
     const now = Date.now()
-    if (now - lastScanTime < config.minIntervalMs) return
+    if (!force && now - lastScanTime < config.minIntervalMs) return
 
     scannedElementMap.clear()
     const results = scanRoot(document, reason)
@@ -200,8 +202,11 @@ const PageElementScannerController = (function () {
 
   /**
    * 从 MutationRecord 中提取需要扫描的区域根节点。
-   *  - 新增节点：直接取该节点作为区域。
-   *  - 属性变化：取变化的目标元素作为区域。
+   * 仅保留以下三类显著 UI 变化：
+   *   1. 页面弹窗 / 抽屉 / 模态框出现
+   *   2. 折叠面板展开
+   *   3. Tab 页签切换
+   * 其他微小变化（文字更新、按钮状态变化、tooltip 等）不再触发扫描。
    * 去重规则：如果某个区域被另一个区域包含，则只保留外层区域。
    * 排除规则：组件自身的弹窗面板（日期面板、下拉选项、树选择面板等）不触发扫描。
    */
@@ -210,11 +215,15 @@ const PageElementScannerController = (function () {
     for (const m of mutations) {
       if (m.type === 'childList') {
         m.addedNodes.forEach(node => {
-          if (node.nodeType === Node.ELEMENT_NODE) roots.add(node)
+          if (node.nodeType === Node.ELEMENT_NODE && isSignificantUiChange(node)) {
+            roots.add(node)
+          }
         })
       } else if (m.type === 'attributes') {
         const target = m.target
-        if (target && target.nodeType === Node.ELEMENT_NODE) roots.add(target)
+        if (target && target.nodeType === Node.ELEMENT_NODE && isSignificantUiChange(target)) {
+          roots.add(target)
+        }
       }
     }
 
@@ -224,6 +233,42 @@ const PageElementScannerController = (function () {
         return !arr.some(other => other !== root && other.contains(root))
       })
       .filter(root => !isInPopupPanel(root))
+  }
+
+  /**
+   * 判断元素是否属于需要触发扫描的显著 UI 容器。
+   * 仅包含：页面弹窗/抽屉、折叠面板、Tab 页签相关元素。
+   */
+  function isSignificantUiChange(element) {
+    if (!element || typeof element.closest !== 'function') return false
+
+    const significantSelectors = [
+      // 1. 页面弹窗 / 抽屉 / 模态框
+      '.el-dialog', '.el-dialog__wrapper',
+      '.el-drawer', '.el-drawer__wrapper',
+      // '.el-message-box', '.el-message-box__wrapper',//提示信息的出现不扫描
+      '.modal', '.modal-dialog', '.modal-content',
+      '.drawer', '.drawer-content',
+      '.dialog', '.dialog-content',
+
+      // 2. 折叠面板
+      '.el-collapse', '.el-collapse-item',
+      '.el-collapse-item__wrap', '.el-collapse-item__content',
+      '.collapse', '.collapse-panel', '.collapse-content',
+
+      // 3. Tab 页签
+      '.el-tabs', '.el-tab-pane', '.el-tabs__content', '.el-tabs__item',
+      '.tabs', '.tab-pane', '.tab-content', '.tab-item'
+    ]
+
+    for (const selector of significantSelectors) {
+      try {
+        if (element.closest(selector) || element.matches(selector)) return true
+      } catch (e) {
+        // 无效选择器跳过
+      }
+    }
+    return false
   }
 
   /**
@@ -333,6 +378,19 @@ const PageElementScannerController = (function () {
       if (request.type === POPUP_CLOSE) {
         onPopupClosed()
         sendResponse({ status: 'popupClosed' })
+        return true
+      }
+      if (request.type === 'clearAndRescan') {
+        // 重录：清空已有扫描结果，强制重新全量扫描
+        clearTimeout(debounceTimer)
+        debounceTimer = null
+        pendingRoots = []
+        clearData()
+        fullScan('reRecord', true)
+        const count = (typeof Recorder !== 'undefined' && Recorder.scannedPageElements)
+          ? Recorder.scannedPageElements.length
+          : 0
+        sendResponse({ status: 'clearedAndRescanned', count: count })
         return true
       }
       return false
