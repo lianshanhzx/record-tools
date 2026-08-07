@@ -411,4 +411,4 @@ const PageElementScannerController = (function () {
   }
 })()
 
-PageElementScannerController.init()
+// PageElementScannerController.init()

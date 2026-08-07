@@ -1,12 +1,13 @@
 /**
  * 智能选择器 (XPath 版本)
  *
- * 核心策略（参考 XPath 稳定性最佳实践）：
+ * 核心策略：
  * 1. 优先使用元素自身的稳定属性（data-testid / aria-label / name 等）
- * 2. 向上查找最近的稳定祖先作为"锚点"，构建相对路径
- * 3. 路径段尽量使用属性而非纯索引
- * 4. 锚点与路径之间使用 //（后代轴），允许中间结构变化
- * 5. 避免绝对路径（/html/body/...）和纯索引链
+ * 2. 向上查找最近的稳定祖先作为"锚点"，锚点后使用 // 连接
+ * 3. 锚点内部的路径段之间使用 /（子轴），保持结构精确性
+ * 4. 按钮/链接优先使用文本内容定位
+ * 5. 过滤 el-row/el-col 等布局类名
+ * 6. 路径不唯一时自动加同级索引兜底
  */
 
 function quoteXPathValue(value) {
@@ -18,14 +19,23 @@ function quoteXPathValue(value) {
 }
 
 /**
- * 判断类名是否稳定（非框架动态生成）
+ * 判断类名是否稳定（非框架动态生成、非通用布局类）
  */
 function isStableClassName(className) {
   if (!className || className.length < 2) return false;
-  if (/^data-v-/.test(className)) return false;           // Vue scoped
-  if (/^(is-|has-)/.test(className)) return false;        // 状态类
+  if (/^data-v-/.test(className)) return false;              // Vue scoped
+  if (/^(is-|has-)/.test(className)) return false;           // 状态类
   if (/[_-]{2}[a-z0-9]{4,}$/i.test(className)) return false; // 随机后缀
-  if (/^\d+$/.test(className)) return false;              // 纯数字
+  if (/^\d+$/.test(className)) return false;                 // 纯数字
+
+  // 过滤 Element UI 通用布局类（页面出现次数过多，无定位价值）
+  const layoutClasses = [
+    'el-row', 'el-col', 'el-scrollbar', 'el-container',
+    'el-header', 'el-main', 'el-footer', 'el-aside',
+  ];
+  if (layoutClasses.includes(className)) return false;
+  if (/^el-col-\d+$/.test(className)) return false;          // el-col-12 等栅格类
+
   return true;
 }
 
@@ -34,9 +44,10 @@ function isStableClassName(className) {
  */
 function isDynamicValue(value) {
   if (!value) return true;
-  if (/\d{6,}/.test(value)) return true;                  // 长数字
-  if (/^[a-zA-Z0-9]{12,}$/.test(value)) return true;      // 长哈希
-  if (/^el-id-/.test(value)) return true;                 // Element UI 动态 ID
+  if (/\d{6,}/.test(value)) return true;                     // 长数字
+  if (/^[a-zA-Z0-9]{12,}$/.test(value)) return true;         // 长哈希
+  if (/^el-id-/.test(value)) return true;                    // Element UI 动态 ID
+  if (/^el-collapse-content-\d+$/.test(value)) return true;  // Element UI collapse 动态 ID
   return false;
 }
 
@@ -44,13 +55,11 @@ class SmartSelector {
   constructor(element) {
     this.element = element;
     this.semanticTags = ['button', 'input', 'a', 'img', 'textarea', 'select'];
-    // 测试属性（最高优先级）
     this.testAttributes = [
       'data-testid', 'data-cy', 'data-test', 'data-qa',
       'aria-label', 'data-track', 'data-field',
       'id', 'label',
     ];
-    // 业务属性
     this.usefulAttrs = ['name', 'title', 'alt', 'type', 'role', 'aria-labelledby', 'for', 'href', 'placeholder'];
   }
 
@@ -66,7 +75,7 @@ class SmartSelector {
     const uniquePlaceholderXPath = this.findUniquePlaceholderXPath();
     if (uniquePlaceholderXPath) return uniquePlaceholderXPath;
 
-    // 3. 业务属性（name/title/aria 等）
+    // 3. 业务属性
     const uniqueAttrXPath = this.findUniqueAttributeXPath();
     if (uniqueAttrXPath) return uniqueAttrXPath;
 
@@ -85,10 +94,7 @@ class SmartSelector {
       if (!this.element.hasAttribute(attr)) continue;
       const value = this.element.getAttribute(attr);
       if (!value || !value.trim()) continue;
-
-      if (attr === 'id' && (/\d{4,}/.test(value) || /^[a-zA-Z0-9]{10,}$/.test(value) || /^el-id-/.test(value))) {
-        continue;
-      }
+      if (attr === 'id' && isDynamicValue(value)) continue;
 
       const upperXpath = this.getUpperSpecialElementXPath(this.element);
       const xpath = upperXpath + `//*[@${attr}=${quoteXPathValue(value)}]`;
@@ -152,11 +158,7 @@ class SmartSelector {
   // ==================== 阶段 5：相对路径策略 ====================
 
   /**
-   * 降级方案入口：生成相对 XPath
-   * 策略优先级：
-   * 1. 特殊容器（dialog/popover）内的相对路径
-   * 2. 兄弟节点关系定位
-   * 3. 最近稳定祖先锚点 + 相对路径
+   * 降级方案入口
    */
   getXPathFromElement() {
     // 1. 特殊容器处理
@@ -166,6 +168,7 @@ class SmartSelector {
     if (dialogElement && dialogElement.style.display !== "none") {
       const containerXPath = `//div[contains(@class, 'el-dialog__wrapper')][not(contains(@style, 'display: none'))]`;
       const innerPath = this.buildRelativeXPath(this.element, dialogElement);
+      // innerPath 形如 /seg1/seg2/target（不含开头的 //），拼接到容器后
       return `${containerXPath}${innerPath}`;
     }
 
@@ -175,11 +178,11 @@ class SmartSelector {
       return `${containerXPath}${innerPath}`;
     }
 
-    // 2. 尝试兄弟节点关系定位（如：label[text()='Email']/following-sibling::input）
+    // 2. 兄弟节点关系定位
     const siblingXPath = this.findSiblingBasedXPath();
     if (siblingXPath) return siblingXPath;
 
-    // 3. 构建相对路径（从最近稳定锚点出发）
+    // 3. 构建相对路径
     return this.buildRelativeXPath(this.element);
   }
 
@@ -187,13 +190,13 @@ class SmartSelector {
    * 核心算法：构建相对 XPath
    *
    * 从目标元素向上遍历：
-   * - 每一级尝试获取最佳路径段（优先属性，其次稳定类名，最后索引）
-   * - 遇到稳定且唯一的祖先元素时，将其作为锚点，返回 锚点//相对路径
-   * - 使用 //（后代轴）连接，允许中间 DOM 结构变化
+   * - 每一级获取最佳路径段（按钮优先文本，其次属性，再次稳定类名，最后索引）
+   * - 遇到稳定唯一锚点时，返回 锚点XPath + // + 相对路径（段间用 / 连接）
+   * - 路径不唯一时，给目标段加同级索引兜底
    *
    * @param {Element} target - 目标元素
    * @param {Element|null} boundaryElement - 边界元素（如 dialog），到达后停止
-   * @returns {string} 相对 XPath
+   * @returns {string} 以 // 或 / 开头的相对 XPath
    */
   buildRelativeXPath(target, boundaryElement = null) {
     const segments = [];
@@ -205,18 +208,15 @@ class SmartSelector {
         break;
       }
 
-      // 对于祖先元素（非目标本身），检查是否为稳定锚点
+      // 先检查当前祖先是否为稳定锚点（segments 里存的是 current 后代到 target 的路径）
       if (current !== target) {
         const anchorLocator = this.getStableLocator(current);
         if (anchorLocator) {
           const anchorXPath = `//${anchorLocator}`;
           if (this.isUniqueXPath(anchorXPath)) {
-            // 找到稳定锚点，用 // 连接相对路径（允许中间结构变化）
-            const relativePath = segments.join('//');
-            const fullXPath = relativePath ? `${anchorXPath}//${relativePath}` : anchorXPath;
-            if (this.isUniqueXPath(fullXPath, target)) {
-              return fullXPath;
-            }
+            const result = this.tryBuildFromAnchor(anchorXPath, segments, target);
+            if (result) return result;
+            // 锚点路径不唯一，继续向上找更近的锚点或更多上下文
           }
         }
       }
@@ -225,8 +225,8 @@ class SmartSelector {
       const segment = this.getBestPathSegment(current);
       segments.unshift(segment);
 
-      // 检查当前累积路径是否已唯一（无锚点时的短路径）
-      const currentPath = `//${segments.join('//')}`;
+      // 检查累积路径是否唯一（段间用 / 连接）
+      const currentPath = `//${segments.join('/')}`;
       if (this.isUniqueXPath(currentPath, target)) {
         return currentPath;
       }
@@ -234,8 +234,105 @@ class SmartSelector {
       current = current.parentElement;
     }
 
-    // 到达顶层，返回累积路径
-    return segments.length > 0 ? `//${segments.join('//')}` : `//${target.tagName.toLowerCase()}`;
+    // 兜底：路径不唯一，给目标段加同级索引
+    return this.buildFallbackXPath(segments, target);
+  }
+
+  /**
+   * 尝试从锚点构建唯一路径
+   * 优先 //锚点//seg1/seg2/target，其次加索引
+   */
+  tryBuildFromAnchor(anchorXPath, segments, target) {
+    if (segments.length === 0) return anchorXPath;
+
+    const relativePath = segments.join('/');
+
+    // 尝试 //锚点//路径
+    let fullXPath = `${anchorXPath}//${relativePath}`;
+    if (this.isUniqueXPath(fullXPath, target)) {
+      return fullXPath;
+    }
+
+    // 尝试给目标段加同级索引
+    const indexedSegments = [...segments];
+    indexedSegments[indexedSegments.length - 1] = this.addSiblingIndex(target, segments[segments.length - 1]);
+    fullXPath = `${anchorXPath}//${indexedSegments.join('/')}`;
+    if (this.isUniqueXPath(fullXPath, target)) {
+      return fullXPath;
+    }
+
+    return null;
+  }
+
+  /**
+   * 兜底方案：路径不唯一时，给目标段加同级索引
+   */
+  buildFallbackXPath(segments, target) {
+    if (segments.length === 0) {
+      const tagName = target.tagName.toLowerCase();
+      return `//${tagName}[${this.getSiblingIndex(target)}]`;
+    }
+
+    // 给目标段加索引
+    const indexed = [...segments];
+    indexed[indexed.length - 1] = this.addSiblingIndex(target, indexed[indexed.length - 1]);
+
+    let path = `//${indexed.join('/')}`;
+    if (this.isUniqueXPath(path, target)) {
+      return path;
+    }
+
+    // 索引后仍不唯一（极端情况），尝试逐级向上加索引
+    for (let i = indexed.length - 2; i >= 0; i--) {
+      const el = this.getElementAtDepth(target, indexed.length - 1 - i);
+      if (el) {
+        indexed[i] = this.addSiblingIndex(el, indexed[i]);
+        path = `//${indexed.join('/')}`;
+        if (this.isUniqueXPath(path, target)) {
+          return path;
+        }
+      }
+    }
+
+    // 最终兜底：返回带索引的路径（即使不唯一也是最佳努力结果）
+    return path;
+  }
+
+  /**
+   * 获取目标元素向上第 depth 级的祖先元素
+   */
+  getElementAtDepth(target, depth) {
+    let el = target;
+    for (let i = 0; i < depth && el; i++) {
+      el = el.parentElement;
+    }
+    return el;
+  }
+
+  /**
+   * 给路径段添加同级索引
+   * button[@type='button'] → button[2][@type='button']
+   * button → button[2]
+   */
+  addSiblingIndex(element, segment) {
+    const index = this.getSiblingIndex(element);
+    const bracketPos = segment.indexOf('[');
+    if (bracketPos === -1) {
+      return `${segment}[${index}]`;
+    }
+    // 索引插入为第一个谓词（表示同级第N个）
+    return segment.slice(0, bracketPos) + `[${index}]` + segment.slice(bracketPos);
+  }
+
+  /**
+   * 获取元素在同名兄弟节点中的位置（1-based）
+   */
+  getSiblingIndex(element) {
+    const parent = element.parentElement;
+    if (!parent) return 1;
+    const siblings = Array.from(parent.children).filter(c => c.tagName === element.tagName);
+    if (siblings.length <= 1) return 1;
+    return siblings.indexOf(element) + 1;
   }
 
   /**
@@ -248,7 +345,7 @@ class SmartSelector {
     let position = 1;
 
     while (sibling && position <= 3) {
-      // 尝试兄弟节点的文本内容
+      // 兄弟节点文本
       const text = sibling.textContent?.trim();
       if (text && text.length > 0 && text.length <= 20) {
         const siblingTag = sibling.tagName.toLowerCase();
@@ -258,7 +355,7 @@ class SmartSelector {
         }
       }
 
-      // 尝试兄弟节点的稳定属性
+      // 兄弟节点稳定属性
       const siblingLocator = this.getStableLocator(sibling);
       if (siblingLocator) {
         const xpath = `//${siblingLocator}/following-sibling::${targetTag}[${position}]`;
@@ -277,14 +374,12 @@ class SmartSelector {
   // ==================== 辅助方法 ====================
 
   /**
-   * 获取元素的稳定锚点定位器
-   * 仅当元素具有稳定且可能唯一的属性时返回，否则返回 null
-   * 用于在向上遍历过程中识别"锚点"元素
+   * 获取元素的稳定锚点定位器（严格模式，仅用于识别锚点）
    */
   getStableLocator(element) {
     const tagName = element.tagName.toLowerCase();
 
-    // 1. 测试属性（最高优先级）
+    // 1. 测试属性
     for (const attr of this.testAttributes) {
       if (!element.hasAttribute(attr)) continue;
       const value = element.getAttribute(attr);
@@ -326,16 +421,35 @@ class SmartSelector {
 
   /**
    * 获取元素在路径中的最佳定位段
-   * 优先使用属性，其次是稳定类名，最后是 tag[index]
+   * 优先级：按钮/链接文本 > 稳定属性 > 其他属性 > 稳定类名 > tag[index]
    */
   getBestPathSegment(element) {
     const tagName = element.tagName.toLowerCase();
 
-    // 1. 尝试稳定锚点属性
+    // 1. 按钮/链接：优先使用文本内容
+    if (tagName === 'button' || tagName === 'a' || element.getAttribute('role') === 'button') {
+      const text = (element.innerText || element.textContent || '').trim();
+      const type = element.getAttribute('type');
+
+      if (text && text.length > 0 && text.length <= 20) {
+        // 文本 + type 组合（更精确）
+        if (type && type.length <= 15) {
+          return `${tagName}[@type=${quoteXPathValue(type)}][normalize-space()=${quoteXPathValue(text)}]`;
+        }
+        return `${tagName}[normalize-space()=${quoteXPathValue(text)}]`;
+      }
+
+      // 无文本时用 type
+      if (type && type.length <= 15) {
+        return `${tagName}[@type=${quoteXPathValue(type)}]`;
+      }
+    }
+
+    // 2. 稳定锚点属性
     const stableLocator = this.getStableLocator(element);
     if (stableLocator) return stableLocator;
 
-    // 2. 尝试其他有用属性
+    // 3. 其他有用属性
     for (const attr of ['type', 'placeholder', 'for', 'href']) {
       if (!element.hasAttribute(attr)) continue;
       const value = element.getAttribute(attr);
@@ -345,21 +459,18 @@ class SmartSelector {
       return `${tagName}[@${attr}=${quoteXPathValue(value)}]`;
     }
 
-    // 3. 尝试稳定类名
+    // 4. 稳定类名
     const classLocators = this.getElementClassLocators(element);
     if (classLocators.length > 0) {
       return classLocators[0];
     }
 
-    // 4. 降级：tag + 同级索引
-    const parent = element.parentElement;
-    if (!parent) return tagName;
-
-    const siblings = Array.from(parent.children).filter(c => c.tagName === element.tagName);
-    if (siblings.length === 1) return tagName;
-
-    const index = siblings.indexOf(element) + 1;
-    return `${tagName}[${index}]`;
+    // 5. 降级：tag + 同级索引
+    const index = this.getSiblingIndex(element);
+    if (index > 1) {
+      return `${tagName}[${index}]`;
+    }
+    return tagName;
   }
 
   /**
