@@ -7,7 +7,7 @@
 - **网页操作录制**：录制点击、输入、下拉选择、日期选择、树形选择等操作
 - **智能 XPath 选择器**：自动生成稳定、可读的定位路径
 - **智能自动填表**：基于 LLM 一句话自动填写 Element UI 表单
-- **操作列表管理**：查看、编辑、删除已录制的操作
+- **录制记录列表管理**：查看、编辑、删除已录制的操作
 - **导出/提交**：支持下载 JSON 文件或直接提交到天阳自动化平台
 
 ## 项目结构
@@ -78,7 +78,7 @@ openssl rsa -in private.pem -pubout -out public.pem
 1. 点击扩展图标或从外部系统触发，打开录制弹窗
 2. 点击「开始录制」按钮
 3. 在目标网页上执行需要录制的操作
-4. 操作会自动显示在弹窗的操作列表中
+4. 操作会自动显示在弹窗的录制记录列表中
 5. 录制完成后点击「终止录制」或「暂停录制」
 
 ### 编辑操作
@@ -388,7 +388,7 @@ Content (messageHandler.js)
   │  sendResponse({ elements: Recorder.scannedPageElements || [] })
   ▼
 Popup
-  构建 JSON payload → 下载 all-elements-{timestamp}.json
+  按显示区域构建树形结构 → 下载 scanned-elements-tree-{timestamp}.json
 ```
 
 ---

@@ -89,7 +89,7 @@ const PageElementScannerController = (function () {
   }
 
   /**
-   * 将最新的扫描结果同步到 popup 操作列表。
+   * 将最新的扫描结果同步到 popup 录制记录列表。
    * 每次扫描完成后都应调用，保证 popup 列表与实际扫描结果一致。
    */
   function notifyPopup() {
@@ -411,4 +411,4 @@ const PageElementScannerController = (function () {
   }
 })()
 
-// PageElementScannerController.init()
+PageElementScannerController.init()

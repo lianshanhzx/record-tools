@@ -174,6 +174,16 @@ const Recorder = {
       actionType = 'select_tree_option';
     }
 
+    // 计算元素分组路径（弹窗/页签/折叠面板），供 popup 树形展示使用
+    let group = []
+    try {
+      if (typeof ElementGrouper !== 'undefined') {
+        group = ElementGrouper.getGroupPath(element)
+      }
+    } catch (e) {
+      console.warn('[Recorder] 计算分组路径失败:', e)
+    }
+
     return {
       id: id,
       action: actionType,
@@ -182,6 +192,7 @@ const Recorder = {
       targetType: 'xpath',
       tagName: element.tagName.toLowerCase(),
       propertiesName: labelChName || '',
+      group: group,
       attributes: attributes
     };
   },

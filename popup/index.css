@@ -253,9 +253,61 @@ body {
 .col-seq { width: 48px; flex-shrink: 0; color: #8090a8; }
 .col-cmd { width: 76px; flex-shrink: 0; }
 .col-name { width: 22%; flex-shrink: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.col-ttype { width: 70px; flex-shrink: 0; color: #8090a8; }
-.col-target { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #5f6b7a; font-family: "SFMono-Regular", Consolas, monospace; font-size: 11px; }
+.col-target { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; overflow: hidden; white-space: nowrap; color: #5f6b7a; font-family: "SFMono-Regular", Consolas, monospace; font-size: 11px; }
+.col-target-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.copy-target-btn {
+    flex-shrink: 0;
+    padding: 1px 6px;
+    border: 1px solid #d0d5dd;
+    border-radius: 3px;
+    background: #fff;
+    color: #5f6b7a;
+    font-size: 10px;
+    line-height: 16px;
+    cursor: pointer;
+    font-family: inherit;
+    transition: all 0.1s;
+}
+.copy-target-btn:hover { border-color: #1a73e8; color: #1a73e8; background: #f0f6ff; }
+.copy-target-btn.copied { border-color: #34a853; color: #34a853; background: #e6f4ea; }
 .col-val { width: 18%; flex-shrink: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ===== List Group Header (树形分组标题行) ===== */
+.list-group-header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 16px;
+    background: #f0f4fa;
+    border-bottom: 1px solid #e8eaed;
+    font-size: 12px;
+    font-weight: 600;
+    color: #1f2a3a;
+    cursor: pointer;
+    user-select: none;
+    transition: background 0.1s;
+}
+.list-group-header:hover { background: #e6edf7; }
+.group-arrow { width: 12px; flex-shrink: 0; font-size: 10px; color: #8090a8; }
+.group-type-badge {
+    flex-shrink: 0;
+    font-size: 10px;
+    font-weight: 400;
+    padding: 0 5px;
+    border-radius: 3px;
+    background: #f0f2f5;
+    color: #5f6b7a;
+}
+.group-type-dialog .group-type-badge { background: #fdf0e5; color: #e6a23c; }
+.group-type-tab .group-type-badge { background: #e8f0fe; color: #1a73e8; }
+.group-type-collapse .group-type-badge { background: #e6f4ea; color: #1e7e34; }
+.group-name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.group-count { margin-left: auto; flex-shrink: 0; font-size: 11px; font-weight: 400; color: #8090a8; }
 
 /* ===== Edit Area ===== */
 .edit-area {

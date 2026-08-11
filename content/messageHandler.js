@@ -83,6 +83,13 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
           if (el && typeof SmartSelector !== 'undefined') {
             try { xpath = new SmartSelector(el).getSelector() } catch (e) { }
           }
+          // 计算元素分组路径（弹窗/页签/折叠面板），供 popup 树形展示使用
+          let group = []
+          try {
+            if (el && typeof ElementGrouper !== 'undefined') {
+              group = ElementGrouper.getGroupPath(el)
+            }
+          } catch (e) { }
           // 调用 messageHandler.js → sendBackMessage
           chrome.runtime.sendMessage({
             type: 'addActionData',
@@ -93,6 +100,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
               tagName: el ? el.tagName.toLowerCase() : 'input',
               value: r.value || '',
               propertiesName: r.label || '',
+              group: group,
               id: AutoFormFill._uuid(),
               timestamp: Date.now(),
               attributes: { value: r.value || '', type: 'ATTRIBUTE' }

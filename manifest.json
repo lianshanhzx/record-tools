@@ -17,7 +17,7 @@
     "content_scripts": [
         {
         "matches": ["<all_urls>"],
-        "js": ["/libs/utils.js", "/libs/autoFormFill.js", "/libs/smartSelector.js", "/libs/elementBusinessName.js", "/libs/myXPathHelper.js", "/config/scannerExclude.js", "/libs/pageElementScanner.js", "/content/recorder.js", "/content/treeSelectHandler.js", "/content/eventMonitor.js", "/content/messageHandler.js", "/content/pageElementScannerController.js", "/content/content.js"]
+        "js": ["/libs/utils.js", "/libs/autoFormFill.js", "/libs/smartSelector.js", "/libs/elementBusinessName.js", "/libs/myXPathHelper.js", "/config/scannerExclude.js", "/libs/elementGrouper.js", "/libs/pageElementScanner.js", "/content/recorder.js", "/content/treeSelectHandler.js", "/content/eventMonitor.js", "/content/messageHandler.js", "/content/pageElementScannerController.js", "/content/content.js"]
         }
     ],
     "action": { 

@@ -449,6 +449,7 @@ const PageElementScanner = (function () {
    *   required        是否必填
    *   readonly        是否只读
    *   type            input 类型
+   *   group           元素分组路径（弹窗/页签/折叠面板，由 ElementGrouper 计算）
    *   timestamp       扫描时间戳
    *
    * @param {Element} element 候选元素（用于判定 kind）
@@ -492,6 +493,17 @@ const PageElementScanner = (function () {
     const required = !!targetElement.required
     const readonly = !!targetElement.readOnly
 
+    // ---- 计算元素分组路径（弹窗/页签/折叠面板） ----
+    // 复用 libs/elementGrouper.js，结果可序列化，供 popup 树形展示使用。
+    let group = []
+    try {
+      if (typeof ElementGrouper !== 'undefined') {
+        group = ElementGrouper.getGroupPath(targetElement)
+      }
+    } catch (e) {
+      console.warn('[PageElementScanner] 计算分组路径失败:', e, targetElement)
+    }
+
     return {
       id: uuid(),
       command: getCommandByKind(kind),
@@ -509,6 +521,7 @@ const PageElementScanner = (function () {
       required: required,
       readonly: readonly,
       type: inputType,
+      group: group,
       timestamp: Date.now()
     }
   }

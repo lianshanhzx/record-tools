@@ -24,10 +24,15 @@ function uuid() {
  * @returns {string}
  */
 function action2Json(actions, url) {
-  const commands = (actions || []).filter(a => a.propertiesName).map(a => ({
-    ...a,
-    params: { label_text: a.propertiesName, value: a.value || '' }
-  }))
+  const commands = (actions || []).filter(a => a.propertiesName).map(a => {
+    const item = {
+      ...a,
+      params: { label_text: a.propertiesName, value: a.value || '' }
+    }
+    // group 字段仅用于 popup 树形分组展示，不输出到下载/提交的 JSON
+    delete item.group
+    return item
+  })
   return JSON.stringify({
     id: uuid(), name: 'test', url,
     tests: [{ id: uuid(), name: 'test', commands }]

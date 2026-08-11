@@ -20,7 +20,7 @@ const UploadService = {
   },
 
   /**
-   * 下载页面扫描的所有元素为 JSON 文件。
+   * 下载页面扫描的元素，按显示区域（弹窗/页签/折叠面板）组织为树形结构 JSON 文件。
    * 调用位置：popup/index.js → downloadAllElementsBtn 点击
    */
   async downloadAllElements() {
@@ -35,17 +35,22 @@ const UploadService = {
       return
     }
 
+    // 按显示区域（弹窗/页签/折叠面板）构建树形结构
+    const tree = (typeof ElementGrouper !== 'undefined')
+      ? ElementGrouper.buildTree(resp.elements)
+      : []
+
     const payload = JSON.stringify({
       id: Utils.uuid(),
-      name: 'all-elements',
+      name: 'scanned-elements-tree',
       url: RecordManager.recordDataUrl || tab.url || '',
       scannedAt: Date.now(),
       elementCount: resp.elements.length,
-      elements: resp.elements
+      tree: tree
     }, null, 2)
 
     const blob = new Blob([payload], { type: 'application/json' })
-    const filename = 'all-elements-' + new Date().getTime() + '.json'
+    const filename = 'scanned-elements-tree-' + new Date().getTime() + '.json'
     Utils.saveAsBlobFile(blob, filename)
   },
 
