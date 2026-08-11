@@ -169,6 +169,44 @@ const PageElementScanner = (function () {
     return /\bel-select__caret\b/.test(cls)
   }
 
+  /**
+   * 提取下拉框/选择器的选项文本列表。
+   *
+   * 支持场景：
+   *   - 原生 <select>：读取所有 <option> 的 textContent。
+   *   - Element UI .el-select：若下拉面板已渲染，读取 .el-select-dropdown__item 的文本。
+   *
+   * @param {Element} element 扫描到的候选元素
+   * @param {Element} targetElement 解析后的目标元素
+   * @returns {string[]} 选项文本数组；无法提取时返回空数组
+   */
+  function extractSelectOptions(element, targetElement) {
+    const options = []
+    const root = element || targetElement
+    if (!root) return options
+
+    // 1. 原生 <select>
+    const tagName = (targetElement.tagName || '').toLowerCase()
+    if (tagName === 'select') {
+      targetElement.querySelectorAll('option').forEach(opt => {
+        const text = (opt.textContent || '').trim()
+        if (text) options.push(text)
+      })
+      return options
+    }
+
+    // 2. Element UI .el-select：尝试从已渲染的下拉面板上读取
+    //    扫描时面板通常未打开，可能返回空数组；录制时若面板打开会再次补充。
+    if (typeof root.closest === 'function' && root.closest('.el-select')) {
+      document.querySelectorAll('.el-select-dropdown__item').forEach(item => {
+        const text = (item.innerText || item.textContent || '').trim()
+        if (text) options.push(text)
+      })
+    }
+
+    return options
+  }
+
   // ==================== 按钮识别 ====================
 
   /**
@@ -504,6 +542,9 @@ const PageElementScanner = (function () {
       console.warn('[PageElementScanner] 计算分组路径失败:', e, targetElement)
     }
 
+    // ---- 下拉框选项提取 ----
+    const options = kind === 'select' ? extractSelectOptions(element, targetElement) : []
+
     return {
       id: uuid(),
       command: getCommandByKind(kind),
@@ -522,6 +563,7 @@ const PageElementScanner = (function () {
       readonly: readonly,
       type: inputType,
       group: group,
+      options: options,
       timestamp: Date.now()
     }
   }

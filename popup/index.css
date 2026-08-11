@@ -272,6 +272,18 @@ body {
 .copy-target-btn.copied { border-color: #34a853; color: #34a853; background: #e6f4ea; }
 .col-val { width: 18%; flex-shrink: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
+.manual-badge {
+    display: inline-block;
+    margin-right: 5px;
+    padding: 0 4px;
+    border-radius: 3px;
+    background: #1a73e8;
+    color: #fff;
+    font-size: 10px;
+    line-height: 14px;
+    vertical-align: middle;
+}
+
 /* ===== List Group Header (树形分组标题行) ===== */
 .list-group-header {
     display: flex;

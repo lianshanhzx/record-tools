@@ -206,6 +206,50 @@ const Recorder = {
   },
 
   /**
+   * 提取下拉框选项文本列表（录制时使用）。
+   * 支持原生 <select> 和 Element UI .el-select。
+   * @param {Element} element 当前操作的元素
+   * @returns {string[]}
+   */
+  extractSelectOptions(element) {
+    if (!element) return []
+    const options = []
+
+    // 原生 <select>
+    if (element.tagName === 'SELECT') {
+      Array.from(element.options).forEach(opt => {
+        const text = (opt.textContent || '').trim()
+        if (text) options.push(text)
+      })
+      return options
+    }
+
+    // Element UI .el-select：优先从当前元素所在的下拉面板读取
+    const dropdown = typeof element.closest === 'function' ? element.closest('.el-select-dropdown') : null
+    if (dropdown) {
+      dropdown.querySelectorAll('.el-select-dropdown__item').forEach(item => {
+        const text = (item.innerText || item.textContent || '').trim()
+        if (text) options.push(text)
+      })
+      return options
+    }
+
+    // 兜底：若点击的是 el-select 内部 input，尝试从 body 上可见的下拉面板读取
+    const selectRoot = typeof element.closest === 'function' ? element.closest('.el-select') : null
+    if (selectRoot) {
+      const visibleDropdown = document.querySelector('.el-select-dropdown:not([style*="display: none"])')
+      if (visibleDropdown) {
+        visibleDropdown.querySelectorAll('.el-select-dropdown__item').forEach(item => {
+          const text = (item.innerText || item.textContent || '').trim()
+          if (text) options.push(text)
+        })
+      }
+    }
+
+    return options
+  },
+
+  /**
    * 获取输入类元素的真实值（兼容 Vue/React/Element UI）。
    * 调用位置：recorder.js → setAttributeAction / monitorDateInput
    */
@@ -300,6 +344,34 @@ const Recorder = {
     );
     action.command = action.command || action.attributes.command
 
+    // 关联扫描信息：命中扫描记录时，使用扫描记录的 target/propertiesName/group/kind/scanIndex，
+    // 保留实际元素产生的 command/value/options，保证点击按钮内部子元素也能定位到扫描按钮。
+    if (typeof PageElementScannerController !== 'undefined' && typeof PageElementScannerController.findScannedInfoByElement === 'function') {
+      const scannedInfo = PageElementScannerController.findScannedInfoByElement(element)
+      if (scannedInfo) {
+        action.target = scannedInfo.target
+        action.propertiesName = scannedInfo.propertiesName
+        action.group = scannedInfo.group || action.group
+        action.kind = scannedInfo.kind
+        action.scanIndex = scannedInfo.scanIndex
+        if (scannedInfo.options && scannedInfo.options.length > 0 && (!action.options || action.options.length === 0)) {
+          action.options = scannedInfo.options
+        }
+      }
+    }
+
+    // 下拉框选项补充（录制时面板通常已打开，可获取到选项）
+    if (action.kind === 'select' || element.command === 'select' || element.command === 'selectOption') {
+      const opts = this.extractSelectOptions(element)
+      if (opts && opts.length > 0) {
+        action.options = opts
+      }
+    }
+
+    // 人工录制标记：所有 setAction 产生的动作都来自用户真实操作
+    action.manualRecord = true
+    action.recorded = true
+
     this.currId = action.id
     this.getLableValue(element)
 
@@ -328,6 +400,13 @@ const Recorder = {
             lastAction.value = selectValueArr.join(',')
           }
         }
+
+        // 把选项和人工标记同步到合并后的 select 动作
+        if (action.options && action.options.length > 0) {
+          lastAction.options = action.options
+        }
+        lastAction.manualRecord = true
+        lastAction.recorded = true
 
         this.actions[this.actions.length - 1] = lastAction
 

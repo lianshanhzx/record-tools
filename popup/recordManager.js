@@ -55,15 +55,27 @@ const RecordManager = {
       if (!name && item.attributes && item.attributes.placeholder) name = item.attributes.placeholder
       idx++
       const indent = 16 + depth * 14
+
+      // 人工录制标记
+      const manualBadge = item.manualRecord ? '<span class="manual-badge">人工</span>' : ''
+
+      // 下拉框选项提示
+      let valText = item.value || ''
+      let valTitle = valText
+      if (item.options && item.options.length > 0) {
+        valText = valText ? valText + '（' + item.options.length + '项）' : '（' + item.options.length + '项）'
+        valTitle = (item.value || '') + '\n选项：' + item.options.join(' / ')
+      }
+
       html += '<div class="list-row" style="padding-left:' + indent + 'px" id="' + item.id + '_' + item.timestamp + '">'
       html += '<span class="col-seq">' + idx + '</span>'
       html += '<span class="col-cmd">' + escHtml(item.command || '') + '</span>'
-      html += '<span class="col-name" title="' + escHtml(name || '') + '">' + escHtml(name || '') + '</span>'
+      html += '<span class="col-name" title="' + escHtml(name || '') + '">' + manualBadge + escHtml(name || '') + '</span>'
       html += '<span class="col-target" title="' + escHtml(item.target || '') + '">'
       html += '<span class="col-target-text">' + escHtml(item.target || '') + '</span>'
       html += '<button type="button" class="copy-target-btn" title="复制 Target">复制</button>'
       html += '</span>'
-      html += '<span class="col-val" title="' + escHtml(item.value || '') + '">' + escHtml(item.value || '') + '</span>'
+      html += '<span class="col-val" title="' + escHtml(valTitle) + '">' + escHtml(valText) + '</span>'
       html += '</div>'
     }
 
@@ -122,6 +134,39 @@ const RecordManager = {
   },
 
   /**
+   * 判断记录是否为按钮类型。
+   */
+  isButtonRecord(item) {
+    return item.kind === 'button' || item.command === 'click'
+  },
+
+  /**
+   * 判断记录是否应在列表中显示。
+   * 规则：按钮仅在已被人工录制后显示；其他元素默认显示。
+   */
+  isVisibleRecord(item) {
+    if (this.isButtonRecord(item)) {
+      return item.recorded === true
+    }
+    return true
+  },
+
+  /**
+   * 按扫描位置排序记录。
+   * 有 scanIndex 的排在前面并按 scanIndex 升序；无 scanIndex 的按 timestamp 排在后面。
+   */
+  sortByScanIndex(data) {
+    return (data || []).slice().sort((a, b) => {
+      const hasA = typeof a.scanIndex === 'number'
+      const hasB = typeof b.scanIndex === 'number'
+      if (hasA && hasB) return a.scanIndex - b.scanIndex
+      if (hasA && !hasB) return -1
+      if (!hasA && hasB) return 1
+      return (a.timestamp || 0) - (b.timestamp || 0)
+    })
+  },
+
+  /**
    * 计算同名 propertiesName 的数量，用于去重命名。
    * 调用位置：recordManager.js → handleMessage
    */
@@ -144,15 +189,29 @@ const RecordManager = {
       const name = message.data.propertiesName
       const byTarget = target ? this.recordActionList.findIndex(a => a.target === target) : -1
       if (byTarget >= 0) {
-        this.recordActionList[byTarget] = { ...this.recordActionList[byTarget], value: message.data.value, command: message.data.command, propertiesName: message.data.propertiesName, action: message.data.action, group: message.data.group || this.recordActionList[byTarget].group }
+        this.recordActionList[byTarget] = {
+          ...this.recordActionList[byTarget],
+          value: message.data.value,
+          command: message.data.command,
+          propertiesName: message.data.propertiesName,
+          action: message.data.action,
+          group: message.data.group || this.recordActionList[byTarget].group,
+          kind: message.data.kind || this.recordActionList[byTarget].kind,
+          scanIndex: typeof message.data.scanIndex === 'number' ? message.data.scanIndex : this.recordActionList[byTarget].scanIndex,
+          options: message.data.options || this.recordActionList[byTarget].options,
+          recorded: true,
+          manualRecord: true
+        }
       } else {
         if (this.recordActionList.length > 0) {
           const cnt = this.computedSamePropertiesName(this.recordActionList, name)
           if (cnt > 0) message.data.propertiesName = name + '-' + cnt
         }
+        message.data.recorded = true
+        message.data.manualRecord = true
         this.recordActionList.push(message.data)
       }
-      this.recordInfoLit = this.filterRecordListData(this.recordActionList)
+      this.recordInfoLit = this.sortByScanIndex(this.filterRecordListData(this.recordActionList).filter(r => this.isVisibleRecord(r)))
       this.currentRecordInfo = {}
       this.renderRecordList(this.recordInfoLit)
       this.updateRecordCount()
@@ -163,16 +222,31 @@ const RecordManager = {
         const name = el.propertiesName
         const byTarget = target ? this.recordActionList.findIndex(a => a.target === target) : -1
         if (byTarget >= 0) {
-          this.recordActionList[byTarget] = { ...this.recordActionList[byTarget], command: el.command, propertiesName: el.propertiesName, action: el.action, group: el.group || this.recordActionList[byTarget].group }
+          this.recordActionList[byTarget] = {
+            ...this.recordActionList[byTarget],
+            command: el.command,
+            propertiesName: el.propertiesName,
+            action: el.action,
+            group: el.group || this.recordActionList[byTarget].group,
+            kind: el.kind || this.recordActionList[byTarget].kind,
+            scanIndex: typeof el.scanIndex === 'number' ? el.scanIndex : this.recordActionList[byTarget].scanIndex,
+            options: el.options || this.recordActionList[byTarget].options,
+            recorded: this.recordActionList[byTarget].recorded || this.isVisibleRecord(el),
+            manualRecord: this.recordActionList[byTarget].manualRecord || false
+          }
         } else {
           if (this.recordActionList.length > 0) {
             const cnt = this.computedSamePropertiesName(this.recordActionList, name)
             if (cnt > 0) el.propertiesName = name + '-' + cnt
           }
+          // 扫描阶段：按钮默认隐藏，其他元素默认显示；均未人工录制
+          el.recorded = !this.isButtonRecord(el)
+          el.manualRecord = false
+          if (!el.options) el.options = []
           this.recordActionList.push(el)
         }
       }
-      this.recordInfoLit = this.filterRecordListData(this.recordActionList)
+      this.recordInfoLit = this.sortByScanIndex(this.filterRecordListData(this.recordActionList).filter(r => this.isVisibleRecord(r)))
       this.currentRecordInfo = {}
       this.renderRecordList(this.recordInfoLit)
       this.updateRecordCount()
@@ -208,8 +282,10 @@ const RecordManager = {
     })
 
     $('#deleteCmdBtn').click(function () {
+      self.recordActionList = self.recordActionList.filter(item => item.id !== self.currentRecordInfo.id)
       self.recordInfoLit = self.recordInfoLit.filter(item => item.id !== self.currentRecordInfo.id)
       setTimeout(() => self.renderRecordList(self.recordInfoLit), 0)
+      self.updateRecordCount()
     })
 
     $('#saveNameBtn').click(function () {

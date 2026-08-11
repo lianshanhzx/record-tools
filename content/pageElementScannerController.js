@@ -73,6 +73,7 @@ const PageElementScannerController = (function () {
 
   /**
    * 根据缓存的位置信息重新排序，并把结果同步到 Recorder.scannedPageElements。
+   * 排序后为每个元素分配全局 scanIndex，用于 popup 按页面视觉位置定位。
    */
   function updatePublicArray() {
     const entries = Array.from(scannedElementMap.entries())
@@ -83,9 +84,31 @@ const PageElementScannerController = (function () {
       return rectA.left - rectB.left
     })
 
+    // 按排序后的位置分配全局索引
+    entries.forEach((entry, index) => {
+      entry[1].scanIndex = index
+    })
+
     if (typeof Recorder !== 'undefined') {
       Recorder.scannedPageElements = entries.map(([_, info]) => cloneInfo(info))
     }
+  }
+
+  /**
+   * 根据 DOM 元素反查对应的扫描信息。
+   * 支持元素自身命中，或被扫描目标元素包含的情况（如点击按钮内部的 span 时命中外层按钮）。
+   * @param {Element} element 待查找的 DOM 元素
+   * @returns {Object|null} 扫描信息副本；未命中返回 null
+   */
+  function findScannedInfoByElement(element) {
+    if (!element) return null
+    for (const [targetEl, info] of scannedElementMap) {
+      if (!targetEl) continue
+      if (targetEl === element || (typeof targetEl.contains === 'function' && targetEl.contains(element))) {
+        return cloneInfo(info)
+      }
+    }
+    return null
   }
 
   /**
@@ -407,7 +430,8 @@ const PageElementScannerController = (function () {
     onPopupOpened: onPopupOpened,
     onPopupClosed: onPopupClosed,
     fullScan: fullScan,
-    scanRegions: scanRegions
+    scanRegions: scanRegions,
+    findScannedInfoByElement: findScannedInfoByElement
   }
 })()
 
