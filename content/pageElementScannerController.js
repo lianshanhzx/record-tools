@@ -26,6 +26,8 @@ const PageElementScannerController = (function () {
     debounceMs: 2000,
     // 两次扫描之间的最小间隔
     minIntervalMs: 2000,
+    // 按钮点击后多久内的 DOM 变化会被视为由该按钮触发
+    triggerMaxAgeMs: 1500,
     // MutationObserver 配置
     observerOptions: {
       childList: true,
@@ -42,8 +44,19 @@ const PageElementScannerController = (function () {
   // 在 debounce 窗口内累积所有 mutation 的根节点，避免只扫描最后一次 mutation 的 roots
   let pendingRoots = []
 
-  // 用 targetElement 作为 key，保存完整的扫描信息（含内部 _rect 引用）
+  // 用 "元素 target + 锚点 target" 作为 key 保存扫描快照。
+  // 同一弹窗组件被 A/B 按钮复用时，允许同一 DOM/XPath 在不同锚点下同时保留。
   const scannedElementMap = new Map()
+
+  // 当前 DOM 元素最近一次所属的锚点上下文。
+  // 后续无触发源的小 mutation 继续更新当前上下文，不覆盖历史锚点快照。
+  let activeAnchorByElement = new WeakMap()
+
+  // 最近点击的按钮类元素（作为增量扫描的触发源候选）
+  let lastTrigger = null
+
+  // 页面点击监听器引用，stopObserver 时移除
+  let clickListener = null
 
   // ==================== 基础工具 ====================
 
@@ -60,38 +73,181 @@ const PageElementScannerController = (function () {
     return true
   }
 
+  function makeContextKey(target, anchorTarget) {
+    return (target || '') + '\n@@anchor=' + (anchorTarget || '')
+  }
+
   /**
    * 克隆扫描信息，删除内部 DOM 引用和位置缓存，避免被序列化到 JSON。
+   * 保留 anchorTarget / anchorPropertiesName 供 popup 展示锚点关系。
    */
   function cloneInfo(info) {
     const clone = Object.assign({}, info)
     delete clone._sourceElement
     delete clone._targetElement
     delete clone._rect
+    delete clone._anchorElement
+    if (info._anchorTarget) {
+      clone.anchorTarget = info._anchorTarget
+      let anchorName = info._anchorPropertiesName || ''
+      for (const [targetEl, anchorInfo] of scannedElementMap) {
+        if (anchorInfo.target === info._anchorTarget) {
+          anchorName = anchorInfo.propertiesName || anchorName
+          break
+        }
+      }
+      clone.anchorPropertiesName = anchorName
+    }
+    delete clone._anchorTarget
+    delete clone._anchorPropertiesName
+    delete clone._contextUpdatedAt
     return clone
   }
 
   /**
    * 根据缓存的位置信息重新排序，并把结果同步到 Recorder.scannedPageElements。
-   * 排序后为每个元素分配全局 scanIndex，用于 popup 按页面视觉位置定位。
+   * 排序规则：
+   *   1. 先按视觉位置（top -> left）计算基础序；
+   *   2. 若元素带有锚点（_anchorTarget），则整体移动到锚点元素之后；
+   *   3. 同锚点的元素之间保持视觉顺序；
+   *   4. 最后按最终顺序分配全局 scanIndex，popup 按 scanIndex 渲染。
    */
   function updatePublicArray() {
     const entries = Array.from(scannedElementMap.entries())
-    entries.sort((a, b) => {
+
+    // 刷新位置缓存：页面滚动/元素移动后，使用当前真实位置排序
+    entries.forEach(entry => {
+      const info = entry[1]
+      try {
+        if (info._targetElement && info._targetElement.isConnected) {
+          info._rect = info._targetElement.getBoundingClientRect()
+        }
+      } catch (e) {}
+    })
+
+    // 阶段 1：按视觉位置计算基础序
+    const visualSorted = entries.slice().sort((a, b) => {
       const rectA = a[1]._rect || { top: 0, left: 0 }
       const rectB = b[1]._rect || { top: 0, left: 0 }
       if (rectA.top !== rectB.top) return rectA.top - rectB.top
       return rectA.left - rectB.left
     })
 
-    // 按排序后的位置分配全局索引
+    const targetToBaseIndex = new Map()
+    const idToBaseIndex = new Map()
+    visualSorted.forEach((entry, idx) => {
+      const info = entry[1]
+      if (info.target) targetToBaseIndex.set(info.target, idx)
+      idToBaseIndex.set(info.id, idx)
+    })
+
+    // 阶段 2：按锚点目标分组，计算每个锚点组内的子序号（保持视觉顺序）
+    const anchorSubIndexMap = new Map()
+    const anchorGroups = new Map()
+    visualSorted.forEach(entry => {
+      const anchorTarget = entry[1]._anchorTarget
+      if (anchorTarget && targetToBaseIndex.has(anchorTarget)) {
+        if (!anchorGroups.has(anchorTarget)) anchorGroups.set(anchorTarget, [])
+        anchorGroups.get(anchorTarget).push(entry)
+      }
+    })
+    anchorGroups.forEach(items => {
+      items.forEach((item, idx) => {
+        anchorSubIndexMap.set(item[1].id, idx)
+      })
+    })
+
+    // 阶段 3：最终排序键 [锚点基础序或自身基础序, 是否有锚点, 子序号或自身基础序]
+    entries.sort((a, b) => {
+      const infoA = a[1], infoB = b[1]
+      const baseA = idToBaseIndex.get(infoA.id)
+      const baseB = idToBaseIndex.get(infoB.id)
+      const anchorBaseA = infoA._anchorTarget && targetToBaseIndex.has(infoA._anchorTarget)
+        ? targetToBaseIndex.get(infoA._anchorTarget) : null
+      const anchorBaseB = infoB._anchorTarget && targetToBaseIndex.has(infoB._anchorTarget)
+        ? targetToBaseIndex.get(infoB._anchorTarget) : null
+
+      const keyA = anchorBaseA !== null
+        ? [anchorBaseA, 1, anchorSubIndexMap.get(infoA.id)]
+        : [baseA, 0, baseA]
+      const keyB = anchorBaseB !== null
+        ? [anchorBaseB, 1, anchorSubIndexMap.get(infoB.id)]
+        : [baseB, 0, baseB]
+
+      for (let i = 0; i < 3; i++) {
+        if (keyA[i] !== keyB[i]) return keyA[i] - keyB[i]
+      }
+      return 0
+    })
+
+    // 按最终顺序分配全局索引
     entries.forEach((entry, index) => {
       entry[1].scanIndex = index
     })
 
+    const anchoredTotal = entries.filter(e => e[1]._anchorTarget).length
+    if (anchoredTotal > 0) {
+      const firstAnchored = entries.find(e => e[1]._anchorTarget)
+      let anchorName = ''
+      if (firstAnchored) {
+        for (const [targetEl, info] of scannedElementMap) {
+          if (info.target === firstAnchored[1]._anchorTarget) {
+            anchorName = info.propertiesName || ''
+            break
+          }
+        }
+      }
+      console.log(`[ScannerController] 排序完成，共 ${anchoredTotal} 个带锚点元素；首个锚点: ${firstAnchored ? firstAnchored[1]._anchorTarget : 'none'} (${anchorName})`)
+    }
+
     if (typeof Recorder !== 'undefined') {
       Recorder.scannedPageElements = entries.map(([_, info]) => cloneInfo(info))
     }
+  }
+
+  /**
+   * 根据 DOM 元素查找当前上下文中的内部扫描信息。
+   * 若同一 DOM 元素在多个锚点下都有快照，优先返回 activeAnchorByElement 指向的当前锚点版本。
+   */
+  function findCurrentInfoByElement(element) {
+    if (!element) return null
+
+    let matched = null
+    for (const [contextKey, info] of scannedElementMap) {
+      const targetEl = info._targetElement
+      if (!targetEl) continue
+      if (targetEl === element || (typeof targetEl.contains === 'function' && targetEl.contains(element))) {
+        const activeAnchor = activeAnchorByElement.get(targetEl)
+        if (activeAnchor && info._anchorTarget === activeAnchor.target) return info
+        if (!matched || (info._contextUpdatedAt || 0) >= (matched._contextUpdatedAt || 0)) {
+          matched = info
+        }
+      }
+    }
+    if (matched) return matched
+
+    // DOM 被 Vue/React 重渲染后，使用 XPath + 当前活动锚点兜底匹配。
+    try {
+      if (typeof SmartSelector !== 'undefined') {
+        const target = new SmartSelector(element).getSelector()
+        if (target) {
+          const activeAnchor = activeAnchorByElement.get(element)
+          if (activeAnchor) {
+            const activeInfo = scannedElementMap.get(makeContextKey(target, activeAnchor.target))
+            if (activeInfo) return activeInfo
+          }
+          for (const [contextKey, info] of scannedElementMap) {
+            if (info.target === target && (!matched || (info._contextUpdatedAt || 0) >= (matched._contextUpdatedAt || 0))) {
+              matched = info
+            }
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('[ScannerController] XPath 兜底匹配失败', e)
+    }
+
+    return matched
   }
 
   /**
@@ -101,14 +257,18 @@ const PageElementScannerController = (function () {
    * @returns {Object|null} 扫描信息副本；未命中返回 null
    */
   function findScannedInfoByElement(element) {
-    if (!element) return null
-    for (const [targetEl, info] of scannedElementMap) {
-      if (!targetEl) continue
-      if (targetEl === element || (typeof targetEl.contains === 'function' && targetEl.contains(element))) {
-        return cloneInfo(info)
-      }
-    }
-    return null
+    const matched = findCurrentInfoByElement(element)
+    return matched ? cloneInfo(matched) : null
+  }
+
+  /**
+   * 根据 DOM 元素反查内部扫描信息对象（非克隆，用于需要修改引用的场景）。
+   * 支持：1) DOM 引用匹配；2) 子元素命中外层按钮；3) 重新生成 XPath 匹配（处理 Vue/React 重渲染后 DOM 引用失效）。
+   * @param {Element} element 待查找的 DOM 元素
+   * @returns {Object|null} 内部扫描信息对象；未命中返回 null
+   */
+  function findInternalInfoByElement(element) {
+    return findCurrentInfoByElement(element)
   }
 
   /**
@@ -156,9 +316,12 @@ const PageElementScannerController = (function () {
     if (!force && now - lastScanTime < config.minIntervalMs) return
 
     scannedElementMap.clear()
+    activeAnchorByElement = new WeakMap()
+    lastTrigger = null
     const results = scanRoot(document, reason)
     results.forEach(info => {
-      scannedElementMap.set(info._targetElement, info)
+      info._contextUpdatedAt = Date.now()
+      scannedElementMap.set(makeContextKey(info.target, ''), info)
     })
 
     notifyPopup()
@@ -169,10 +332,30 @@ const PageElementScannerController = (function () {
    * 将区域扫描结果合并到已有结果中。
    * 新增/更新的元素写入 scannedElementMap。
    * 已扫描过的元素不会因后续隐藏/移除而被删除，确保元素列表尽量全面。
+   * 合并时保留旧记录中已有的锚点关系（第一次为准）。
    */
   function mergeRegionResults(regionResults, roots) {
     regionResults.forEach(info => {
-      scannedElementMap.set(info._targetElement, info)
+      if (!info._anchorTarget && info._targetElement) {
+        const activeAnchor = activeAnchorByElement.get(info._targetElement)
+        if (activeAnchor) info._anchorTarget = activeAnchor.target
+        if (activeAnchor) info._anchorPropertiesName = activeAnchor.name
+      }
+
+      const contextKey = makeContextKey(info.target, info._anchorTarget)
+      const oldInfo = scannedElementMap.get(contextKey)
+      if (oldInfo && oldInfo._anchorTarget && !info._anchorTarget) {
+        info._anchorTarget = oldInfo._anchorTarget
+        info._anchorPropertiesName = oldInfo._anchorPropertiesName
+      }
+      info._contextUpdatedAt = Date.now()
+      if (info._anchorTarget && info._targetElement) {
+        activeAnchorByElement.set(info._targetElement, {
+          target: info._anchorTarget,
+          name: info._anchorPropertiesName || ''
+        })
+      }
+      scannedElementMap.set(contextKey, info)
     })
 
     notifyPopup()
@@ -180,15 +363,42 @@ const PageElementScannerController = (function () {
 
   /**
    * 扫描一个或多个变化区域，并增量合并。
+   * @param {Element[]} roots 变化区域根节点数组
+   * @param {string} reason 扫描触发原因
+   * @param {Element|null} [anchorElement] 触发本次变化的按钮类元素（可选）
    */
-  function scanRegions(roots, reason) {
+  function scanRegions(roots, reason, anchorElement = null) {
     const now = Date.now()
     if (now - lastScanTime < config.minIntervalMs) {
       const remaining = config.minIntervalMs - (now - lastScanTime)
-      setTimeout(() => scanRegions(roots, reason), remaining)
+      setTimeout(() => scanRegions(roots, reason, anchorElement), remaining)
       return
     }
     if (roots.length === 0) return
+
+    // 解析锚点信息
+    let anchorTarget = null
+    let anchorPropertiesName = null
+    if (anchorElement) {
+      const anchorInfo = findInternalInfoByElement(anchorElement)
+      if (anchorInfo && anchorInfo.target) {
+        anchorTarget = anchorInfo.target
+        anchorPropertiesName = anchorInfo.propertiesName || ''
+      } else {
+        try {
+          if (typeof SmartSelector !== 'undefined') {
+            anchorTarget = new SmartSelector(anchorElement).getSelector()
+          }
+        } catch (e) {
+          console.warn('[ScannerController] 生成锚点 XPath 失败', e)
+        }
+        try {
+          if (anchorTarget && typeof getChineseLabelByElement !== 'undefined') {
+            anchorPropertiesName = getChineseLabelByElement(anchorElement) || ''
+          }
+        } catch (e) {}
+      }
+    }
 
     const allResults = []
     const actualRoots = []
@@ -217,6 +427,23 @@ const PageElementScannerController = (function () {
     }
 
     if (actualRoots.length === 0) return
+
+    // 为本次新扫描到的元素标记锚点（首次为准，已存在锚点的元素不会被覆盖）
+    let anchoredCount = 0
+    if (anchorTarget) {
+      allResults.forEach(info => {
+        if (info.target === anchorTarget) return
+        if (!info._anchorTarget) {
+          info._anchorTarget = anchorTarget
+          info._anchorPropertiesName = anchorPropertiesName || ''
+          anchoredCount++
+        }
+      })
+      console.log(`[ScannerController] 本次增量扫描使用锚点: ${anchorTarget} (${anchorPropertiesName})，锚定 ${anchoredCount}/${allResults.length} 个元素`)
+    } else if (anchorElement) {
+      console.warn('[ScannerController] 存在触发按钮但未能解析为有效锚点:', anchorElement)
+    }
+
     mergeRegionResults(allResults, actualRoots)
     lastScanTime = Date.now()
   }
@@ -269,19 +496,27 @@ const PageElementScannerController = (function () {
       // 1. 页面弹窗 / 抽屉 / 模态框
       '.el-dialog', '.el-dialog__wrapper',
       '.el-drawer', '.el-drawer__wrapper',
+      '.ant-modal', '.ant-modal-wrap', '.ant-modal-content',
+      '.ivu-modal', '.ivu-modal-wrap',
       // '.el-message-box', '.el-message-box__wrapper',//提示信息的出现不扫描
       '.modal', '.modal-dialog', '.modal-content',
       '.drawer', '.drawer-content',
       '.dialog', '.dialog-content',
+      '[role="dialog"]',
 
       // 2. 折叠面板
       '.el-collapse', '.el-collapse-item',
       '.el-collapse-item__wrap', '.el-collapse-item__content',
+      '.ant-collapse', '.ant-collapse-item', '.ant-collapse-content',
+      '.ivu-collapse', '.ivu-collapse-item',
       '.collapse', '.collapse-panel', '.collapse-content',
 
       // 3. Tab 页签
       '.el-tabs', '.el-tab-pane', '.el-tabs__content', '.el-tabs__item',
-      '.tabs', '.tab-pane', '.tab-content', '.tab-item'
+      '.ant-tabs', '.ant-tabs-tabpane', '.ant-tabs-content', '.ant-tabs-tab',
+      '.ivu-tabs', '.ivu-tabs-tabpane', '.ivu-tabs-tab',
+      '.tabs', '.tab-pane', '.tab-content', '.tab-item',
+      '[role="tabpanel"]'
     ]
 
     for (const selector of significantSelectors) {
@@ -334,6 +569,17 @@ const PageElementScannerController = (function () {
     // 在 debounce 窗口内累积所有批次的 roots，避免只扫描最后一批
     pendingRoots.push(...roots)
 
+    // 若存在待触发的按钮点击，且首次显著变化发生在时间窗内，则激活该触发源
+    if (lastTrigger && !lastTrigger.active) {
+      const age = Date.now() - lastTrigger.time
+      if (age <= config.triggerMaxAgeMs) {
+        lastTrigger.active = true
+        console.log('[ScannerController] 触发源已激活，变化距点击', age, 'ms')
+      } else {
+        console.log('[ScannerController] 触发源未激活，变化距点击', age, 'ms，超过', config.triggerMaxAgeMs, 'ms')
+      }
+    }
+
     clearTimeout(debounceTimer)
     debounceTimer = setTimeout(() => {
       // 对累积的所有 roots 做一次去重
@@ -341,8 +587,42 @@ const PageElementScannerController = (function () {
         return !arr.some(other => other !== root && other.contains(root))
       })
       pendingRoots = []
-      scanRegions(uniqueRoots, 'domMutation')
+      const trigger = getRecentTrigger()
+      if (trigger) {
+        console.log('[ScannerController] 准备增量扫描，触发源:', trigger.nodeName, (trigger.textContent || '').trim().slice(0, 20))
+      }
+      scanRegions(uniqueRoots, 'domMutation', trigger)
+      lastTrigger = null
     }, config.debounceMs)
+  }
+
+  /**
+   * 获取最近有效的触发按钮元素。
+   * 触发源在按钮点击时被记录；当首次显著 DOM 变化发生在 config.triggerMaxAgeMs 内时，
+   * 触发源被激活，并在本次扫描完成前保持有效。
+   * @returns {Element|null}
+   */
+  function getRecentTrigger() {
+    if (!lastTrigger) return null
+    if (!lastTrigger.active) return null
+    return lastTrigger.element
+  }
+
+  /**
+   * 页面点击监听回调。
+   * 识别按钮类元素并记录为最近一次触发源，供增量扫描时关联。
+   */
+  function onClick(event) {
+    if (!popupOpen) return
+    const target = event.target
+    let triggerEl = null
+    if (typeof PageElementScanner !== 'undefined' && typeof PageElementScanner.resolveButtonRoot === 'function') {
+      triggerEl = PageElementScanner.resolveButtonRoot(target)
+    }
+    if (triggerEl) {
+      lastTrigger = { element: triggerEl, time: Date.now(), active: false }
+      console.log('[ScannerController] 捕获按钮点击，待关联触发源:', triggerEl.nodeName, triggerEl.textContent?.trim().slice(0, 20))
+    }
   }
 
   // ==================== 生命周期管理 ====================
@@ -352,6 +632,8 @@ const PageElementScannerController = (function () {
     const target = document.body || document.documentElement
     observer = new MutationObserver(onMutations)
     observer.observe(target, config.observerOptions)
+    clickListener = onClick
+    document.addEventListener('click', clickListener, true)
     console.log('[ScannerController] DOM 观察已启动')
   }
 
@@ -360,14 +642,21 @@ const PageElementScannerController = (function () {
       observer.disconnect()
       observer = null
     }
+    if (clickListener) {
+      document.removeEventListener('click', clickListener, true)
+      clickListener = null
+    }
     clearTimeout(debounceTimer)
     debounceTimer = null
     pendingRoots = []
+    lastTrigger = null
     console.log('[ScannerController] DOM 观察已停止')
   }
 
   function clearData() {
     scannedElementMap.clear()
+    activeAnchorByElement = new WeakMap()
+    lastTrigger = null
     if (typeof Recorder !== 'undefined') {
       Recorder.scannedPageElements = []
     }

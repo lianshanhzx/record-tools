@@ -106,9 +106,8 @@ const AutoFormFill = {
       }
     } catch (e) {}
     try {
-      const items = document.querySelectorAll('.el-select-dropdown__item')
-      if (items.length > 0) {
-        return [...items].map(i => i.textContent.trim()).filter(Boolean)
+      if (typeof PageElementScanner !== 'undefined' && typeof PageElementScanner.extractSelectOptions === 'function') {
+        return PageElementScanner.extractSelectOptions(trigger, trigger)
       }
     } catch (e) {}
     return []

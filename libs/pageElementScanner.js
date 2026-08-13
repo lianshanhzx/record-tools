@@ -170,6 +170,97 @@ const PageElementScanner = (function () {
   }
 
   /**
+   * 判断下拉面板当前是否可见。
+   */
+  function isVisibleDropdown(dropdown) {
+    if (!dropdown || !dropdown.isConnected) return false
+    try {
+      const style = window.getComputedStyle(dropdown)
+      if (style.display === 'none' || style.visibility === 'hidden') return false
+      const rect = dropdown.getBoundingClientRect()
+      return rect.width > 0 || rect.height > 0
+    } catch (e) {
+      return false
+    }
+  }
+
+  /**
+   * 查找 Element UI 下拉框自身关联的下拉面板。
+   * 优先使用 ARIA 引用和 Vue popper 引用；仅在当前 select 明确处于打开状态且
+   * 页面只有一个可见面板时使用可见面板兜底，避免读取其他下拉框的选项。
+   */
+  function findSelectDropdown(selectRoot, targetElement) {
+    if (!selectRoot) return null
+    const input = targetElement && targetElement.tagName
+      ? targetElement
+      : selectRoot.querySelector('input:not([type="hidden"])')
+
+    // 1. 标准 ARIA 关联
+    const ariaIds = []
+    ;[selectRoot, input].forEach(el => {
+      if (!el || !el.getAttribute) return
+      const refs = [el.getAttribute('aria-controls'), el.getAttribute('aria-owns')]
+      refs.filter(Boolean).forEach(value => {
+        value.split(/\s+/).filter(Boolean).forEach(id => ariaIds.push(id))
+      })
+    })
+    for (const id of ariaIds) {
+      const referenced = document.getElementById(id)
+      if (!referenced) continue
+      if (referenced.matches && referenced.matches('.el-select-dropdown')) return referenced
+      const dropdown = referenced.closest && referenced.closest('.el-select-dropdown')
+      if (dropdown) return dropdown
+      const childDropdown = referenced.querySelector && referenced.querySelector('.el-select-dropdown')
+      if (childDropdown) return childDropdown
+    }
+
+    // 2. Element UI Vue 实例通常通过 popperElm / $refs.popper 指向自己的面板
+    const vm = selectRoot.__vue__
+    if (vm) {
+      const refs = [
+        vm.popperElm,
+        vm.$refs && vm.$refs.popper && (vm.$refs.popper.$el || vm.$refs.popper)
+      ]
+      for (const ref of refs) {
+        if (!ref) continue
+        if (ref.matches && ref.matches('.el-select-dropdown')) return ref
+        const dropdown = ref.closest && ref.closest('.el-select-dropdown')
+        if (dropdown) return dropdown
+        const childDropdown = ref.querySelector && ref.querySelector('.el-select-dropdown')
+        if (childDropdown) return childDropdown
+      }
+    }
+
+    // 3. 从面板 Vue 父链反查所属 select
+    if (vm) {
+      for (const dropdown of document.querySelectorAll('.el-select-dropdown')) {
+        let panelVm = dropdown.__vue__
+        let depth = 0
+        while (panelVm && depth < 8) {
+          if (panelVm === vm || panelVm.$el === selectRoot) return dropdown
+          panelVm = panelVm.$parent
+          depth++
+        }
+      }
+    }
+
+    // 4. 只有当前 select 明确处于打开/聚焦状态时，才允许唯一可见面板兜底
+    const activeElement = document.activeElement
+    const isOpen = !!(
+      (input && input.getAttribute && input.getAttribute('aria-expanded') === 'true') ||
+      (selectRoot.classList && selectRoot.classList.contains('is-focus')) ||
+      (activeElement && selectRoot.contains && selectRoot.contains(activeElement)) ||
+      (vm && (vm.visible === true || vm.dropdownVisible === true))
+    )
+    if (isOpen) {
+      const visibleDropdowns = Array.from(document.querySelectorAll('.el-select-dropdown')).filter(isVisibleDropdown)
+      if (visibleDropdowns.length === 1) return visibleDropdowns[0]
+    }
+
+    return null
+  }
+
+  /**
    * 提取下拉框/选择器的选项文本列表。
    *
    * 支持场景：
@@ -182,26 +273,40 @@ const PageElementScanner = (function () {
    */
   function extractSelectOptions(element, targetElement) {
     const options = []
+    const seen = new Set()
     const root = element || targetElement
     if (!root) return options
+
+    function pushOptions(container, selector) {
+      if (!container) return
+      container.querySelectorAll(selector).forEach(item => {
+        const text = (item.innerText || item.textContent || '').trim()
+        if (text && !seen.has(text)) {
+          seen.add(text)
+          options.push(text)
+        }
+      })
+    }
 
     // 1. 原生 <select>
     const tagName = (targetElement.tagName || '').toLowerCase()
     if (tagName === 'select') {
-      targetElement.querySelectorAll('option').forEach(opt => {
-        const text = (opt.textContent || '').trim()
-        if (text) options.push(text)
-      })
+      pushOptions(targetElement, 'option')
       return options
     }
 
-    // 2. Element UI .el-select：尝试从已渲染的下拉面板上读取
-    //    扫描时面板通常未打开，可能返回空数组；录制时若面板打开会再次补充。
-    if (typeof root.closest === 'function' && root.closest('.el-select')) {
-      document.querySelectorAll('.el-select-dropdown__item').forEach(item => {
-        const text = (item.innerText || item.textContent || '').trim()
-        if (text) options.push(text)
-      })
+    // 2. 点击选项时，直接读取当前选项所属的面板
+    const directDropdown = typeof root.closest === 'function' ? root.closest('.el-select-dropdown') : null
+    if (directDropdown) {
+      pushOptions(directDropdown, '.el-select-dropdown__item')
+      return options
+    }
+
+    // 3. Element UI .el-select：只读取与当前 select 精确关联的下拉面板
+    const selectRoot = typeof root.closest === 'function' ? root.closest('.el-select') : null
+    if (selectRoot) {
+      const dropdown = findSelectDropdown(selectRoot, targetElement)
+      pushOptions(dropdown, '.el-select-dropdown__item')
     }
 
     return options
@@ -213,10 +318,10 @@ const PageElementScanner = (function () {
    * 判断元素是否属于按钮类元素，或在按钮类元素内部。
    *
    * 按钮判定优先级：
-   *   1. 原生 <button>、<a>
-   *   2. role="button"
-   *   3. 带有 .el-button 类（Element UI 按钮）
-   *   4. 位于 button / a / role=button / .el-button 内部时，返回外层按钮
+   *   1. 原生 <button>、<a>、<input type="button/submit/reset">
+   *   2. role="button/link/tab"
+   *   3. 带有常见按钮类（.el-button / .btn / .button / .ant-btn / .ivu-btn 等）
+   *   4. 位于按钮类元素内部时，返回外层按钮
    *
    * 这样做是为了避免把按钮内部的 <span>、<i> 图标等子元素也单独识别成按钮。
    *
@@ -228,17 +333,21 @@ const PageElementScanner = (function () {
     const tagName = element.tagName.toLowerCase()
 
     // 1. 原生交互元素
-    if (tagName === 'button' || tagName === 'a' || element.getAttribute('role') === 'button') {
-      return element
-    }
+    if (tagName === 'button' || tagName === 'a') return element
+    const inputType = (element.getAttribute('type') || '').toLowerCase()
+    if (tagName === 'input' && ['button', 'submit', 'reset'].includes(inputType)) return element
 
-    // 2. Element UI 按钮类
-    const classAttr = element.getAttribute('class') || ''
-    if (/\bel-button\b/.test(classAttr)) return element
+    // 2. ARIA 角色
+    const role = element.getAttribute('role')
+    if (role === 'button' || role === 'link' || role === 'tab') return element
 
-    // 3. 在按钮内部时，向上找到真正的按钮
+    // 3. 常见 UI 库按钮类
+    const classAttr = (element.getAttribute('class') || '').toLowerCase()
+    if (/\b(el-button|btn|button|ant-btn|ivu-btn)\b/.test(classAttr)) return element
+
+    // 4. 在按钮内部时，向上找到真正的按钮
     if (typeof element.closest === 'function') {
-      return element.closest('button, a, [role="button"], .el-button')
+      return element.closest('button, a, input[type="button"], input[type="submit"], input[type="reset"], [role="button"], [role="link"], [role="tab"], .el-button, [class*="btn"], [class*="button"]')
     }
 
     return null
@@ -678,7 +787,10 @@ const PageElementScanner = (function () {
 
   // 暴露公共接口
   return {
-    scan: scan
+    scan: scan,
+    resolveButtonRoot: resolveButtonRoot,
+    findSelectDropdown: findSelectDropdown,
+    extractSelectOptions: extractSelectOptions
   }
 })()
 

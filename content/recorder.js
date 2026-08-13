@@ -213,40 +213,10 @@ const Recorder = {
    */
   extractSelectOptions(element) {
     if (!element) return []
-    const options = []
-
-    // 原生 <select>
-    if (element.tagName === 'SELECT') {
-      Array.from(element.options).forEach(opt => {
-        const text = (opt.textContent || '').trim()
-        if (text) options.push(text)
-      })
-      return options
+    if (typeof PageElementScanner !== 'undefined' && typeof PageElementScanner.extractSelectOptions === 'function') {
+      return PageElementScanner.extractSelectOptions(element, element)
     }
-
-    // Element UI .el-select：优先从当前元素所在的下拉面板读取
-    const dropdown = typeof element.closest === 'function' ? element.closest('.el-select-dropdown') : null
-    if (dropdown) {
-      dropdown.querySelectorAll('.el-select-dropdown__item').forEach(item => {
-        const text = (item.innerText || item.textContent || '').trim()
-        if (text) options.push(text)
-      })
-      return options
-    }
-
-    // 兜底：若点击的是 el-select 内部 input，尝试从 body 上可见的下拉面板读取
-    const selectRoot = typeof element.closest === 'function' ? element.closest('.el-select') : null
-    if (selectRoot) {
-      const visibleDropdown = document.querySelector('.el-select-dropdown:not([style*="display: none"])')
-      if (visibleDropdown) {
-        visibleDropdown.querySelectorAll('.el-select-dropdown__item').forEach(item => {
-          const text = (item.innerText || item.textContent || '').trim()
-          if (text) options.push(text)
-        })
-      }
-    }
-
-    return options
+    return []
   },
 
   /**
@@ -354,6 +324,8 @@ const Recorder = {
         action.group = scannedInfo.group || action.group
         action.kind = scannedInfo.kind
         action.scanIndex = scannedInfo.scanIndex
+        action.anchorTarget = scannedInfo.anchorTarget || ''
+        action.anchorPropertiesName = scannedInfo.anchorPropertiesName || ''
         if (scannedInfo.options && scannedInfo.options.length > 0 && (!action.options || action.options.length === 0)) {
           action.options = scannedInfo.options
         }

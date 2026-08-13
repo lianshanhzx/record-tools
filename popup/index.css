@@ -284,6 +284,19 @@ body {
     vertical-align: middle;
 }
 
+.anchor-badge {
+    display: inline-block;
+    margin-left: 5px;
+    padding: 0 4px;
+    border-radius: 3px;
+    background: #909399;
+    color: #fff;
+    font-size: 10px;
+    line-height: 14px;
+    vertical-align: middle;
+    cursor: help;
+}
+
 /* ===== List Group Header (树形分组标题行) ===== */
 .list-group-header {
     display: flex;
