@@ -15,6 +15,8 @@ window.onload = function () {
   AutoFillUI.init()
   // popup 打开时通知 content script 触发页面扫描
   notifyPopupOpened()
+  // popup 打开时自动开始录制（相当于自动点击"开始录制"按钮）
+  document.getElementById('recordStartBtn').click()
 }
 
 /**
@@ -145,11 +147,16 @@ function initRecordControls() {
     }
   }
 
-  //点击开始按钮
-  startBtn.addEventListener('click', async () => {
-    const resp = await sendToTab('startRecording')
+  // 开始录制：发送 startRecording 消息并切换 UI 为录制中
+  async function startRecording() {
+    const tab = await getCurrentTab()
+    if (!tab || !tab.id) return
+    const resp = await sendToContent(tab.id, { type: 'startRecording' })
     if (resp) setRecordingUI('recording')
-  })
+  }
+
+  //点击开始按钮
+  startBtn.addEventListener('click', startRecording)
 
   //点击停止按钮
   stopBtn.addEventListener('click', async () => {
