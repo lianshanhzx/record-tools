@@ -210,6 +210,32 @@ function initBottomActions() {
 
 // ==================== 接收来自 content 的录制消息 ====================
 // 调用 popup/recordManager.js → RecordManager.handleMessage
+let scanStatusTimer = null
+
+function updateScanStatus(data) {
+  const el = document.getElementById('scanStatus')
+  if (!el || !data) return
+
+  clearTimeout(scanStatusTimer)
+  el.classList.add('visible')
+
+  if (data.status === 'scanning') {
+    el.textContent = '正在扫描页面元素...'
+    el.classList.add('scanning')
+    return
+  }
+
+  el.textContent = '已扫描 ' + (data.count || 0) + ' 个元素'
+  el.classList.remove('scanning')
+  scanStatusTimer = setTimeout(() => {
+    el.classList.remove('visible')
+  }, 2000)
+}
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message.type === 'scanStatus') {
+    updateScanStatus(message.data)
+    return
+  }
   RecordManager.handleMessage(message)
 })

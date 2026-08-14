@@ -13,7 +13,7 @@ importScripts('popupManager.js', 'llmService.js')
 let monitorStates = {}
 
 // 这些消息的目标是 Popup，Background 无需处理，短路返回避免穿透所有分支
-const SKIP_IN_BG = ['addActionData', 'actionProgress', 'actionComplete', 'addScannedElements']
+const SKIP_IN_BG = ['addActionData', 'actionProgress', 'actionComplete', 'addScannedElements', 'scanStatus']
 
 // ==================== 消息路由 ====================
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {

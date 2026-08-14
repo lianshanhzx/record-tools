@@ -329,6 +329,14 @@ const Recorder = {
         if (scannedInfo.options && scannedInfo.options.length > 0 && (!action.options || action.options.length === 0)) {
           action.options = scannedInfo.options
         }
+      } else if (typeof PageElementScannerController.getPendingScanAnchorByElement === 'function') {
+        // 弹窗/页签等新区域已出现但仍在扫描 debounce 期时，扫描快照尚不可用。
+        // 先补齐即将使用的锚点，后续扫描结果便能按 target + anchorTarget 与该人工动作合并。
+        const pendingAnchor = PageElementScannerController.getPendingScanAnchorByElement(element)
+        if (pendingAnchor) {
+          action.anchorTarget = pendingAnchor.target
+          action.anchorPropertiesName = pendingAnchor.propertiesName
+        }
       }
     }
 
