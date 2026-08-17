@@ -26,6 +26,8 @@ const MessageHandler = {
   }
 }
 
+let screenshotOriginalScrollBehavior = null
+
 // ==================== 与 popup / background 的消息监听 ====================
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   // 开始/恢复录制 → 调用 content.js → startRecordEvent
@@ -38,6 +40,47 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.type === 'getScannedElements') {
     sendResponse({ elements: Recorder.scannedPageElements || [] });
     return true;
+  }
+  // 全页截图：由 popup 控制滚动，content 只负责页面坐标与滚动位置恢复。
+  if (request.type === 'prepareFullPageScreenshot') {
+    const root = document.documentElement
+    const body = document.body
+    screenshotOriginalScrollBehavior = root.style.scrollBehavior
+    root.style.scrollBehavior = 'auto'
+    sendResponse({
+      scrollX: window.scrollX,
+      scrollY: window.scrollY,
+      viewportWidth: window.innerWidth,
+      viewportHeight: window.innerHeight,
+      documentWidth: Math.max(root.scrollWidth, body ? body.scrollWidth : 0, root.clientWidth),
+      documentHeight: Math.max(root.scrollHeight, body ? body.scrollHeight : 0, root.clientHeight),
+      devicePixelRatio: window.devicePixelRatio || 1
+    })
+    return true
+  }
+  if (request.type === 'scrollForScreenshot') {
+    window.scrollTo(request.x || 0, request.y || 0)
+    // 两帧后响应，给布局、懒加载和浏览器绘制一次稳定机会。
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      setTimeout(() => {
+        const root = document.documentElement
+        const body = document.body
+        sendResponse({
+          scrollX: window.scrollX,
+          scrollY: window.scrollY,
+          documentHeight: Math.max(root.scrollHeight, body ? body.scrollHeight : 0, root.clientHeight),
+          viewportHeight: window.innerHeight
+        })
+      }, 180)
+    }))
+    return true
+  }
+  if (request.type === 'restoreScrollAfterScreenshot') {
+    window.scrollTo(request.x || 0, request.y || 0)
+    document.documentElement.style.scrollBehavior = screenshotOriginalScrollBehavior || ''
+    screenshotOriginalScrollBehavior = null
+    sendResponse({ ok: true })
+    return true
   }
   // popup 关闭 → 移除所有 DOM 监听并清理录制状态，通知 background 清除标记
   if (request.type === 'popupClosed') {

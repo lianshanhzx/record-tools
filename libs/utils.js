@@ -18,24 +18,15 @@ function uuid() {
 }
 
 /**
- * 将录制动作数组转换为自动化平台 JSON 格式
- * @param {Array} actions 动作数组
+ * 将平行节点数组转换为自动化平台 JSON 格式
+ * @param {Array} groups 通过 id/pid 表达层级的分组和操作节点
  * @param {string} url 录制页面 URL
  * @returns {string}
  */
-function action2Json(actions, url) {
-  const commands = (actions || []).filter(a => a.propertiesName).map(a => {
-    const item = {
-      ...a,
-      params: { label_text: a.propertiesName, value: a.value || '' }
-    }
-    // group 字段仅用于 popup 树形分组展示，不输出到下载/提交的 JSON
-    delete item.group
-    return item
-  })
+function actionTree2Json(groups, url) {
   return JSON.stringify({
     id: uuid(), name: 'test', url,
-    tests: [{ id: uuid(), name: 'test', commands }]
+    groups: groups || []
   })
 }
 
@@ -59,7 +50,7 @@ function saveAsBlobFile(blob, name) {
 }
 
 // 支持 CommonJS 和浏览器全局变量两种导出方式
-const Utils = { uuid, action2Json, txt2Blob, saveAsBlobFile }
+const Utils = { uuid, actionTree2Json, txt2Blob, saveAsBlobFile }
 
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = Utils

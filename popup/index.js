@@ -56,11 +56,19 @@ function escHtml(s) {
 }
 
 /**
- * 获取当前活动标签页（排除扩展自身页面）。
+ * 获取录制来源标签页。popup 为独立窗口，优先使用后台在唤起时保存的来源标签页。
  * 调用位置：popup/autoFill.js → executeFill / popup/uploadService.js → downloadAllElements
  *           popup/index.js → initRecordControls / downloadAllElementsBtn
  */
 async function getCurrentTab() {
+  try {
+    const response = await chrome.runtime.sendMessage({ type: 'getPopupTargetTab' })
+    if (response && response.tab && response.tab.id && response.tab.url && !response.tab.url.startsWith('chrome-extension://')) {
+      return response.tab
+    }
+  } catch (e) {
+    // 后台重启时使用原有活动标签页兜底逻辑。
+  }
   const tabs = await chrome.tabs.query({ active: true, lastFocusedWindow: true })
   for (const t of tabs) {
     if (t.url && !t.url.startsWith('chrome-extension://')) return t

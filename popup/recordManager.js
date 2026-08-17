@@ -13,6 +13,10 @@ const RecordManager = {
   recordInfoLit: [],
   currentRecordInfo: {},
   recordDataUrl: '',
+  // key 为分组节点 key，value 为该分组下的截图相对地址数组。
+  groupScreenshots: {},
+  displayGroupMap: new Map(),
+  displayRoots: [],
   // 分组折叠状态，key 为组节点 key，true 表示折叠（默认展开）
   groupCollapseState: {},
 
@@ -162,6 +166,7 @@ const RecordManager = {
               key: nodeKey,
               type: g.type || 'group',
               name: g.name || '分组',
+              path: parent ? parent.path.concat([g]) : [g],
               entries: [],
               count: 0
             }
@@ -194,11 +199,15 @@ const RecordManager = {
       const typeLabels = (typeof ElementGrouper !== 'undefined' && ElementGrouper.GROUP_TYPE_LABELS) || {}
       const typeLabel = typeLabels[node.type] || '分组'
       const indent = 16 + depth * 14
+      const screenshotCount = self.getGroupScreenshotCount(node.key)
       html += '<div class="list-group-header group-type-' + escHtml(node.type) + '" data-group-key="' + escHtml(node.key) + '" style="padding-left:' + indent + 'px">'
       html += '<span class="group-arrow">' + (collapsed ? '▸' : '▾') + '</span>'
       html += '<span class="group-type-badge">' + escHtml(typeLabel) + '</span>'
       html += '<span class="group-name" title="' + escHtml(node.name) + '">' + escHtml(node.name) + '</span>'
       html += '<span class="group-count">' + node.count + ' 条</span>'
+      html += '<button type="button" class="group-screenshot-list" data-group-key="' + escHtml(node.key) + '">截图 ' + screenshotCount + '</button>'
+      html += '<button type="button" class="group-screenshot-btn" data-group-key="' + escHtml(node.key) + '">截图</button>'
+      html += '<button type="button" class="group-delete-btn" data-group-key="' + escHtml(node.key) + '">删除</button>'
       html += '</div>'
     }
 
@@ -216,20 +225,26 @@ const RecordManager = {
       })
     }
 
-    function hasChildGroup(node) {
-      return node.entries.some(entry => entry.kind === 'group')
-    }
-
     if (!data || data.length === 0) {
+      self.displayRoots = []
+      self.displayGroupMap = new Map()
       document.getElementById('listBody').innerHTML = ''
       return
     }
 
     const roots = buildDisplayTree(data)
+    self.displayRoots = roots
+    self.displayGroupMap = new Map()
+    function indexNode(node) {
+      self.displayGroupMap.set(node.key, node)
+      node.entries.forEach(entry => {
+        if (entry.kind === 'group') indexNode(entry.node)
+      })
+    }
+    roots.forEach(indexNode)
     roots.forEach(node => {
-      // 仅有纯主页面记录时继续保持平铺；存在子分组时显示主页面标题以明确层级。
-      const showHeader = !(roots.length === 1 && node.type === 'page' && !hasChildGroup(node))
-      renderNode(node, 0, showHeader)
+      // 截图入口位于分组标题，因此主页面也始终显示标题。
+      renderNode(node, 0, true)
     })
 
     document.getElementById('listBody').innerHTML = html
@@ -411,8 +426,131 @@ const RecordManager = {
     this.recordInfoLit = []
     this.currentRecordInfo = {}
     this.recordDataUrl = ''
+    this.groupScreenshots = {}
+    this.displayGroupMap = new Map()
+    this.displayRoots = []
     this.groupCollapseState = {}
     this.updateRecordCount()
+  },
+
+  getGroupNode(groupKey) {
+    return this.displayGroupMap.get(groupKey) || null
+  },
+
+  /**
+   * 删除指定分组及其子分组内的全部操作记录。
+   */
+  deleteGroup(groupKey) {
+    const node = this.getGroupNode(groupKey)
+    if (!node) return 0
+
+    const items = new Set()
+    function collectItems(currentNode) {
+      currentNode.entries.forEach(entry => {
+        if (entry.kind === 'item') items.add(entry.item)
+        else collectItems(entry.node)
+      })
+    }
+    collectItems(node)
+
+    this.recordActionList = this.recordActionList.filter(item => !items.has(item))
+    this.recordInfoLit = this.recordInfoLit.filter(item => !items.has(item))
+    this.currentRecordInfo = {}
+
+    function clearGroupState(currentNode, manager) {
+      delete manager.groupScreenshots[currentNode.key]
+      delete manager.groupCollapseState[currentNode.key]
+      currentNode.entries.forEach(entry => {
+        if (entry.kind === 'group') clearGroupState(entry.node, manager)
+      })
+    }
+    clearGroupState(node, this)
+
+    this.renderRecordList(this.recordInfoLit)
+    this.updateRecordCount()
+    return items.size
+  },
+
+  getGroupScreenshots(groupKey) {
+    return this.groupScreenshots[groupKey] || []
+  },
+
+  getGroupScreenshotCount(groupKey) {
+    return this.getGroupScreenshots(groupKey).length
+  },
+
+  addGroupScreenshot(groupKey, screenshotPath) {
+    if (!this.groupScreenshots[groupKey]) this.groupScreenshots[groupKey] = []
+    this.groupScreenshots[groupKey].push(screenshotPath)
+    this.renderRecordList(this.recordInfoLit)
+  },
+
+  removeGroupScreenshot(groupKey, screenshotPath) {
+    this.groupScreenshots[groupKey] = this.getGroupScreenshots(groupKey).filter(path => path !== screenshotPath)
+    this.renderRecordList(this.recordInfoLit)
+  },
+
+  /**
+   * 输出平行节点列表，通过 id/pid 表达操作列表中的父子层级。
+   * 分组节点使用 page/tab/collapse/dialog，操作节点统一使用 ele。
+   */
+  buildExportGroups() {
+    const result = []
+
+    function exportAction(item, parentId) {
+      const {
+        group,
+        attributes,
+        disabled,
+        required,
+        readonly,
+        tagName,
+        kind,
+        label,
+        placeholder,
+        title,
+        type,
+        options,
+        scanIndex,
+        ...action
+      } = item
+      const attr = Object.assign({}, attributes || {})
+
+      ;['disabled', 'required', 'readonly'].forEach(key => {
+        if (typeof item[key] !== 'undefined') attr[key] = item[key]
+      })
+
+      return Object.assign(action, {
+        id: item.id,
+        pid: parentId,
+        type: 'ele',
+        params: { label_text: item.propertiesName, value: item.value || '' },
+        attr: attr
+      })
+    }
+
+    function exportNode(node, parentId, screenshots) {
+      result.push({
+        id: node.key,
+        pid: parentId,
+        type: node.type,
+        key: node.key,
+        name: node.name,
+        screenshots: (screenshots[node.key] || []).slice()
+      })
+
+      node.entries.forEach(entry => {
+        if (entry.kind === 'item') {
+          if (!entry.item.propertiesName) return
+          result.push(exportAction(entry.item, node.key))
+        } else {
+          exportNode(entry.node, node.key, screenshots)
+        }
+      })
+    }
+
+    this.displayRoots.forEach(node => exportNode(node, null, this.groupScreenshots))
+    return result
   },
 
   /**
@@ -496,11 +634,125 @@ const RecordManager = {
       $('#editVal').val(self.currentRecordInfo.value || '')
     })
 
+    $(document).on('click', '.group-screenshot-btn', async function (e) {
+      e.preventDefault()
+      e.stopImmediatePropagation()
+      const button = this
+      const groupKey = button.getAttribute('data-group-key')
+      const groupNode = self.getGroupNode(groupKey)
+      if (!groupNode) return
+
+      const tab = await getCurrentTab()
+      if (!tab || !tab.id) {
+        alert('无法获取目标页面')
+        return
+      }
+
+      button.disabled = true
+      const originalText = button.textContent
+      try {
+        const screenshotPath = await ScreenshotService.captureFullPage(tab, groupNode, (current, total) => {
+          button.textContent = '截图中 ' + current + '/' + total
+        })
+        self.addGroupScreenshot(groupKey, screenshotPath)
+      } catch (error) {
+        alert('截图失败: ' + error.message)
+        button.disabled = false
+        button.textContent = originalText
+      }
+    })
+
+    $(document).on('click', '.group-screenshot-list', function (e) {
+      e.preventDefault()
+      e.stopImmediatePropagation()
+      self.openScreenshotDialog($(this).attr('data-group-key'))
+    })
+
+    $(document).on('click', '.group-delete-btn', function (e) {
+      e.preventDefault()
+      e.stopImmediatePropagation()
+      const groupKey = $(this).attr('data-group-key')
+      const groupNode = self.getGroupNode(groupKey)
+      if (!groupNode) return
+      if (!confirm('确定删除分组“' + groupNode.name + '”及其下所有操作吗？此操作无法撤销。')) return
+      self.deleteGroup(groupKey)
+    })
+
+    $('#closeScreenshotDialog').click(function () {
+      self.closeScreenshotDialog()
+    })
+
+    $('#closeScreenshotPreview').click(function () {
+      self.closeScreenshotPreview()
+    })
+
+    $(document).on('click', '.screenshot-thumb, .preview-screenshot-btn', function () {
+      self.openScreenshotPreview($(this).attr('data-screenshot-path'))
+    })
+
+    $(document).on('click', '.delete-screenshot-btn', async function () {
+      const groupKey = $(this).attr('data-group-key')
+      const screenshotPath = $(this).attr('data-screenshot-path')
+      if (!confirm('确定删除这张截图吗？')) return
+      await ScreenshotService.deleteScreenshot(screenshotPath)
+      self.removeGroupScreenshot(groupKey, screenshotPath)
+      self.openScreenshotDialog(groupKey)
+    })
+
     // 组标题行点击：折叠/展开该组，折叠状态按组 key 记忆
     $(document).on('click', '.list-group-header', function () {
       const key = $(this).attr('data-group-key')
       self.groupCollapseState[key] = !self.groupCollapseState[key]
       self.renderRecordList(self.recordInfoLit)
     })
+  },
+
+  openScreenshotDialog(groupKey) {
+    const node = this.getGroupNode(groupKey)
+    if (!node) return
+    const paths = this.getGroupScreenshots(groupKey)
+    document.getElementById('screenshotDialogTitle').textContent = node.name + ' - 截图 ' + paths.length
+    let html = ''
+    if (paths.length === 0) {
+      html = '<div class="screenshot-empty">该分组暂无截图</div>'
+    } else {
+      paths.forEach(path => {
+        const previewUrl = ScreenshotService.getPreviewUrl(path)
+        const fileName = path.split('/').pop()
+        html += '<div class="screenshot-item">'
+        if (previewUrl) {
+          html += '<img class="screenshot-thumb" src="' + escHtml(previewUrl) + '" data-screenshot-path="' + escHtml(path) + '" alt="' + escHtml(fileName) + '">'
+        } else {
+          html += '<div class="screenshot-thumb screenshot-empty">预览不可用</div>'
+        }
+        html += '<span class="screenshot-file-name" title="' + escHtml(path) + '">' + escHtml(fileName) + '</span>'
+        html += '<span class="screenshot-item-actions">'
+        if (previewUrl) html += '<button type="button" class="preview-screenshot-btn" data-screenshot-path="' + escHtml(path) + '">预览</button>'
+        html += '<button type="button" class="delete delete-screenshot-btn" data-group-key="' + escHtml(groupKey) + '" data-screenshot-path="' + escHtml(path) + '">删除</button>'
+        html += '</span></div>'
+      })
+    }
+    document.getElementById('screenshotDialogBody').innerHTML = html
+    document.getElementById('screenshotDialog').classList.add('open')
+    document.getElementById('screenshotDialog').setAttribute('aria-hidden', 'false')
+  },
+
+  closeScreenshotDialog() {
+    document.getElementById('screenshotDialog').classList.remove('open')
+    document.getElementById('screenshotDialog').setAttribute('aria-hidden', 'true')
+  },
+
+  openScreenshotPreview(screenshotPath) {
+    const previewUrl = ScreenshotService.getPreviewUrl(screenshotPath)
+    if (!previewUrl) return
+    document.getElementById('screenshotPreviewImage').src = previewUrl
+    document.getElementById('screenshotPreview').classList.add('open')
+    document.getElementById('screenshotPreview').setAttribute('aria-hidden', 'false')
+  },
+
+  closeScreenshotPreview() {
+    document.getElementById('screenshotPreview').classList.remove('open')
+    document.getElementById('screenshotPreview').setAttribute('aria-hidden', 'true')
+    document.getElementById('screenshotPreviewImage').removeAttribute('src')
   }
 }

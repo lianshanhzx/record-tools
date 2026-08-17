@@ -80,6 +80,29 @@ const PageElementScanner = (function () {
     return true
   }
 
+  /**
+   * 获取元素在文档坐标系中的边界坐标。
+   * 使用文档坐标而非视口坐标，页面滚动后同一元素的坐标仍可用于全页截图等后续标注。
+   * @param {Element} element 目标元素
+   * @returns {{topLeft: {x: number, y: number}, bottomRight: {x: number, y: number}}}
+   */
+  function getPagePosition(element) {
+    try {
+      const rect = element.getBoundingClientRect()
+      const scrollX = window.scrollX || window.pageXOffset || 0
+      const scrollY = window.scrollY || window.pageYOffset || 0
+      return {
+        topLeft: { x: rect.left + scrollX, y: rect.top + scrollY },
+        bottomRight: { x: rect.right + scrollX, y: rect.bottom + scrollY }
+      }
+    } catch (e) {
+      return {
+        topLeft: { x: 0, y: 0 },
+        bottomRight: { x: 0, y: 0 }
+      }
+    }
+  }
+
   // ==================== 排除规则 ====================
 
   /**
@@ -597,6 +620,7 @@ const PageElementScanner = (function () {
    *   readonly        是否只读
    *   type            input 类型
    *   group           元素分组路径（弹窗/页签/折叠面板，由 ElementGrouper 计算）
+   *   position        元素边界的文档坐标（左上角 topLeft、右下角 bottomRight）
    *   timestamp       扫描时间戳
    *
    * @param {Element} element 候选元素（用于判定 kind）
@@ -673,6 +697,7 @@ const PageElementScanner = (function () {
       type: inputType,
       group: group,
       options: options,
+      position: getPagePosition(targetElement),
       timestamp: Date.now()
     }
   }
@@ -790,7 +815,8 @@ const PageElementScanner = (function () {
     scan: scan,
     resolveButtonRoot: resolveButtonRoot,
     findSelectDropdown: findSelectDropdown,
-    extractSelectOptions: extractSelectOptions
+    extractSelectOptions: extractSelectOptions,
+    getPagePosition: getPagePosition
   }
 })()
 

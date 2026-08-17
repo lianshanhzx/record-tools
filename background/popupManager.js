@@ -6,12 +6,19 @@
 const PopupManager = {
   // 当前打开的 popup 窗口 id，用于 onRemoved 判断
   popupWindowId: null,
+  // 唤起录制窗口的网页标签页，popup 后续所有操作均以它为目标。
+  targetTabId: null,
 
   /**
    * 打开或聚焦 popup 操作窗口。
    * 调用位置：background/service-worker.js → onMessage (openPopup) / onClicked / onMessageExternal
    */
-  async openOpertePopup(safeLeft) {
+  async openOpertePopup(safeLeft, targetTabId) {
+    if (targetTabId) {
+      this.targetTabId = targetTabId
+      // MV3 Service Worker 可随时休眠，session storage 保留当前 popup 生命周期内的来源标签。
+      await chrome.storage.session.set({ popupTargetTabId: targetTabId })
+    }
     const windows = await chrome.windows.getAll();
     const popup = windows.find(win => win.type === 'popup');
 
@@ -66,6 +73,8 @@ chrome.windows.onRemoved.addListener((windowId) => {
   if (windowId === PopupManager.popupWindowId) {
     console.log('popup 已关闭', windowId)
     PopupManager.popupWindowId = null
+    PopupManager.targetTabId = null
+    chrome.storage.session.remove('popupTargetTabId')
     PopupManager.notifyPopupClosed()
   }
 })

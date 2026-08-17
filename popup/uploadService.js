@@ -16,7 +16,7 @@ const UploadService = {
    * 调用位置：popup/index.js → downloadBtn 点击
    */
   downloadActions() {
-    Utils.saveAsBlobFile(Utils.txt2Blob(Utils.action2Json(RecordManager.recordInfoLit, RecordManager.recordDataUrl)), 'result.json')
+    Utils.saveAsBlobFile(Utils.txt2Blob(Utils.actionTree2Json(RecordManager.buildExportGroups(), RecordManager.recordDataUrl)), 'result.json')
   },
 
   /**
@@ -60,7 +60,7 @@ const UploadService = {
    */
   uploadTexResult(zdhData) {
     return new Promise((resolve, reject) => {
-      const file = new File([Utils.txt2Blob(Utils.action2Json(RecordManager.recordInfoLit, RecordManager.recordDataUrl))], 'result', { type: 'text/plain' })
+      const file = new File([Utils.txt2Blob(Utils.actionTree2Json(RecordManager.buildExportGroups(), RecordManager.recordDataUrl))], 'result', { type: 'text/plain' })
       const fd = new FormData()
       fd.append('file', file)
       fd.append('mothed', 'By.XPATH')

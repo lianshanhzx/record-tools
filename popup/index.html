@@ -97,6 +97,21 @@
             <button id="submitBtn" class="primary">提交</button>
         </div>
     </div>
+
+    <div id="screenshotDialog" class="screenshot-dialog" aria-hidden="true">
+        <div class="screenshot-dialog-panel">
+            <div class="screenshot-dialog-header">
+                <strong id="screenshotDialogTitle">分组截图</strong>
+                <button type="button" id="closeScreenshotDialog">关闭</button>
+            </div>
+            <div id="screenshotDialogBody" class="screenshot-dialog-body"></div>
+        </div>
+    </div>
+
+    <div id="screenshotPreview" class="screenshot-preview" aria-hidden="true">
+        <button type="button" id="closeScreenshotPreview">关闭预览</button>
+        <div class="screenshot-preview-body"><img id="screenshotPreviewImage" alt="截图预览"></div>
+    </div>
 </body>
 <script src="../config/config.js"></script>
 <script src="../libs/jquery.js"></script>
@@ -105,5 +120,6 @@
 <script src="./recordManager.js"></script>
 <script src="./autoFill.js"></script>
 <script src="./uploadService.js"></script>
+<script src="./screenshotService.js"></script>
 <script src="./index.js"></script>
 </html>

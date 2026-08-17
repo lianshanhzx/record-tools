@@ -246,12 +246,15 @@ const PageElementScannerController = (function () {
   function updatePublicArray() {
     const entries = Array.from(scannedElementMap.entries())
 
-    // 刷新位置缓存：页面滚动/元素移动后，使用当前真实位置排序
+    // 刷新位置缓存与公开坐标：页面滚动/元素移动后，使用当前真实位置排序和标注。
     entries.forEach(entry => {
       const info = entry[1]
       try {
         if (info._targetElement && info._targetElement.isConnected) {
           info._rect = info._targetElement.getBoundingClientRect()
+          if (typeof PageElementScanner !== 'undefined' && typeof PageElementScanner.getPagePosition === 'function') {
+            info.position = PageElementScanner.getPagePosition(info._targetElement)
+          }
         }
       } catch (e) {}
     })
