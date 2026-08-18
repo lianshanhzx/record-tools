@@ -7,6 +7,7 @@
 - **网页操作录制**：录制点击、输入、下拉选择、日期选择、树形选择等操作
 - **智能 XPath 选择器**：自动生成稳定、可读的定位路径
 - **智能自动填表**：基于 LLM 一句话自动填写 Element UI 表单
+- **分组截图**：对录制的每个分组生成全页长截图，自动识别内部滚动容器（适配 Vue + Element UI），自动去除吸顶表头/固定工具栏造成的重复区域
 - **录制记录列表管理**：查看、编辑、删除已录制的操作
 - **导出/提交**：支持下载 JSON 文件或直接提交到天阳自动化平台
 
@@ -23,16 +24,17 @@ record-tools/
 │   ├── recorder.js             # 录制核心：状态管理、动作解析、元素值获取
 │   ├── treeSelectHandler.js    # 树形选择器处理（节点识别、弹窗检测）
 │   ├── eventMonitor.js         # 事件监听（change/click 事件注册与分发）
-│   └── messageHandler.js       # 消息通信（content 侧消息收发）
+│   └── messageHandler.js       # 消息通信 + 截图滚动目标识别与坐标回报（content 侧消息收发）
 ├── popup/
-│   ├── index.html              # 弹窗页面
+│   ├── index.html              # 弹窗页面（含分组截图弹窗列表与预览）
 │   ├── index.js                # 弹窗入口：录制控制、通信工具、消息分发
 │   ├── autoFill.js             # 自动填表 UI（面板交互、日志、配置管理）
-│   ├── recordManager.js        # 录制数据管理（列表渲染、过滤、编辑）
+│   ├── recordManager.js        # 录制数据管理（列表渲染、过滤、编辑、分组截图入口）
+│   ├── screenshotService.js    # 全页滚动截图：驱动滚动、逐屏捕获、裁切拼接、下载
 │   ├── uploadService.js        # 上传/下载服务（导出 JSON、提交到平台）
 │   └── index.css               # 弹窗样式
 ├── config/
-│   └── config.js               # 全局配置（如接口服务器地址）
+│   └── config.js               # 全局配置（接口地址、截图保存目录、截图像素上限）
 ├── libs/                       # 第三方/业务库
 │   ├── jquery.js               # jQuery 库
 │   ├── utils.js                # 通用工具函数（uuid、action2Json、下载等）
@@ -107,6 +109,23 @@ openssl rsa -in private.pem -pubout -out public.pem
 - **下载**：点击「下载」按钮，将录制结果保存为 JSON 文件
 - **提交**：点击「提交」按钮，将录制结果上传到天阳自动化平台
 
+### 分组截图
+
+录制过程中，录制列表会按页面结构（主页面 / 页签 / 弹窗 / 折叠面板等）分组展示，每个分组标题右侧有「截图」按钮：
+
+1. 点击某个分组标题上的「截图」按钮，对该分组对应的页面区域生成全页长截图
+2. 截图过程中：
+   - 其他分组的「截图」按钮自动变为不可用状态
+   - 当前分组按钮显示「正在截图中 x/y」实时进度
+   - 任务结束（成功或失败）后全部按钮自动恢复
+3. 截图自动下载到浏览器默认下载目录下的 `TY-record-tools/screenshots` 子目录，文件名格式为 `{分组名}-full-page-{yyyyMMdd-HHmmss-mmm}.png`
+4. 分组标题右侧的「截图 n」按钮可打开该分组的截图列表，支持「预览」和「删除」操作
+
+> **滚动与拼接说明**：
+> - 支持两种滚动场景：普通文档整体滚动，以及 Vue + Element UI 常见的内部滚动容器（如 `el-scrollbar` 外层布局、表格区域等），会被自动识别并正确滚动
+> - 相邻截图保留一段重叠区用于拼接去重，吸顶表头、固定工具栏等元素在长图中只保留一次，不会重复出现
+> - `captureVisibleTab` 只能捕获可见视口，页面高度过长或截图总像素超过上限时会被拦截并提示
+
 ## 消息通信架构
 
 本扩展采用 Chrome Extension 三端通信模型（Content Script / Popup / Background），通过 `chrome.runtime.sendMessage`、`chrome.tabs.sendMessage`、`chrome.runtime.onMessage`、`chrome.runtime.onMessageExternal` 实现消息传递。
@@ -160,6 +179,12 @@ openssl rsa -in private.pem -pubout -out public.pem
 | `actionComplete` | Content → Popup | `runtime.sendMessage` | 无响应(广播) | 填表全部完成通知 |
 | `callLLM` | Popup → Background | `runtime.sendMessage` | 真正异步响应 | 调用 LLM 生成填表动作 |
 | `getScannedElements` | Popup → Content | `tabs.sendMessage` | 同步响应 | 获取已扫描的页面元素 |
+| `prepareFullPageScreenshot` | Popup → Content | `tabs.sendMessage` | 同步响应 | 截图准备：识别滚动目标、保存原始滚动位置、返回页面几何 |
+| `scrollForScreenshot` | Popup → Content | `tabs.sendMessage` | 异步响应 | 截图滚动：滚动到指定位置并回报实际位置/容器几何（延迟响应等待布局稳定） |
+| `restoreScrollAfterScreenshot` | Popup → Content | `tabs.sendMessage` | 同步响应 | 恢复页面原始滚动位置与 scrollBehavior |
+| `captureVisibleTabForScreenshot` | Popup → Background | `runtime.sendMessage` | 真正异步响应 | 捕获当前可视区截图并返回 dataUrl |
+| `trackScreenshotDownload` | Popup → Background | `runtime.sendMessage` | 异步响应 | 记录截图下载 ID，用于后续清理 |
+| `untrackScreenshotDownload` | Popup → Background | `runtime.sendMessage` | 异步响应 | 移除已清理截图对应的下载 ID |
 | 外部消息 | 外部扩展 → Background | `onMessageExternal` | 无响应 | 接收外部数据并打开弹窗 |
 
 > **注**：`addActionData`、`actionProgress`、`actionComplete` 为高频广播消息，Background 端做了短路返回优化（`SKIP_IN_BG`），避免无效分支遍历。
@@ -393,11 +418,72 @@ Popup
 
 ---
 
-### 场景 G：已清理的无效通道
+### 场景 G：分组截图（全页滚动长图）
+
+截图由三方协作完成：Popup 控制滚动步进与拼接下载，Content 负责识别滚动目标并执行滚动/回报坐标，Background 负责调用 `captureVisibleTab` 抓取视口。
+
+```
+[步骤1: 准备工作]
+Popup (screenshotService.js)
+  │  sendToContent(tab.id, { type: 'prepareFullPageScreenshot' })
+  ▼
+Content (messageHandler.js)
+  │  getScreenshotScrollTarget()  → 识别实际滚动目标
+  │    ├─ 普通页面：document / window 整体滚动
+  │    └─ Vue + Element UI：内部滚动容器（overflow 容器，页面外壳固定）
+  │  保存原始滚动位置与 scrollBehavior → 返回最大滚动距离 / 可视区几何
+  ▼
+Popup
+  预估最终图片尺寸，超过截图像素上限（config.screenshotMaxPixels）直接报错
+
+[步骤2: 滚动捕获循环]
+Popup (screenshotService.js)
+  │  反复调用 sendToContent(scrollForScreenshot, y) 逐屏往下滚动
+  │    每次滚动后 Content 延迟约 180ms 回报实际 scrollTop / maxScrollY / captureRect
+  │  相邻屏之间保留重叠区（约视口高度 25%~40%，见 getCaptureOverlap），
+  │    用于拼接时丢弃吸顶表头等固定内容，避免重复区域
+  │  每屏间隔 550ms 节流（Chrome 对 captureVisibleTab 有每秒调用次数限制）
+  │  chrome.runtime.sendMessage({ type: 'captureVisibleTabForScreenshot' })
+  ▼
+Background (service-worker.js)
+  │  chrome.tabs.captureVisibleTab(windowId, { format: 'png' })
+  │  sendResponse({ dataUrl })
+  ▼
+Content → Popup
+  连续两次到达底部（actualY >= maxScrollY）才判定滚动结束
+
+[步骤3: 拼接与下载]
+Popup (screenshotService.js)
+  │  stitch(captures, pageInfo)
+  │    ├─ 文档滚动：按每屏实际内容位置依次贴入，高度 = 文档高度 × scale
+  │    └─ 内部滚动容器：
+  │         ├─ 保留页头/两侧固定外壳
+  │         ├─ 滚动内容按"新进入视口"区域裁切后插入（去重重叠区）
+  │         └─ 页脚搬到滚动内容末尾，避免被覆盖
+  │  生成 PNG Blob → URL.createObjectURL
+  │  chrome.downloads.download 下载到 TY-record-tools/screenshots 目录
+  │  → trackScreenshotDownload 记录下载 ID（供删除时清理）
+  ▼
+Popup (recordManager.js)
+  更新分组截图列表 → 重新渲染 → 恢复所有截图按钮
+
+[步骤4: 收尾（无论成败）]
+Popup (screenshotService.js finally)
+  │  sendToContent(restoreScrollAfterScreenshot)
+  ▼
+Content
+  恢复容器/窗口原始滚动位置，还原 scrollBehavior
+```
+
+> **去重原理**：Element UI 页面常带吸顶表头与固定工具栏，每个滚动位置它们都出现在视口同一处。截图采用“相邻屏重叠 + 拼接时只取新进入视口内容”策略，仅在首屏保留固定元素一次；内部滚动容器场景还会额外处理页头、侧边与页脚。
+
+---
+
+### 场景 H：已清理的无效通道
 
 以下消息类型在代码中存在监听处理但从未被发送，已在重构中清理：`ping`、`logToConsole`、`rescanElements`、`openPopup`、`checkFlag`、`execute`、`start`、`refresh`（Background 侧 handler）。
 
-> 清理后的 Background 仅处理 4 种消息：`stopRecord` / `startRecord` / `initMonitor` / `callLLM`。
+> 清理后的 Background 仅处理少量消息：`stopRecord` / `startRecord` / `initMonitor` / `getPopupTargetTab` / `callLLM` / `captureVisibleTabForScreenshot` / `trackScreenshotDownload` / `untrackScreenshotDownload`。
 
 ---
 
@@ -446,8 +532,13 @@ sendToContent(tabId, message)
 - 插件基于 **Chrome Manifest V3**，请使用支持 MV3 的 Chrome 版本
 - **content 脚本加载顺序**：`libs/utils.js` → `libs/autoFormFill.js` → `libs/smartSelector.js` → `libs/elementBusinessName.js` → `libs/myXPathHelper.js` → `libs/pageElementScanner.js` → `content/recorder.js` → `content/treeSelectHandler.js` → `content/eventMonitor.js` → `content/messageHandler.js` → `content/content.js`，顺序不可随意调整
 - **background 脚本**：`service-worker.js` 通过 `importScripts()` 加载 `popupManager.js` 和 `llmService.js`
-- **popup 脚本加载顺序**：`config.js` → `jquery.js` → `utils.js` → `recordManager.js` → `autoFill.js` → `uploadService.js` → `index.js`
+- **popup 脚本加载顺序**：`config.js` → `jquery.js` → `utils.js` → `elementGrouper.js` → `recordManager.js` → `autoFill.js` → `uploadService.js` → `screenshotService.js` → `index.js`
 - 弹窗页面通过 `chrome.windows.create` 以 `popup` 类型打开
+- **截图相关配置**：`config/config.js` 中 `screenshotDownloadDirectory` 为下载子目录（只能配置相对路径），`screenshotMaxPixels` 为最终长图的像素上限
+- **截图滚动与拼接**：
+  - 滚动目标由 content 侧自动识别：优先普通文档滚动；当文档自身不可滚动且存在满足条件的内部滚动容器（常见于 Vue + Element UI）时，选择该容器并按其可视区域裁切拼图
+  - 截图期间会禁用其它分组截图按钮，当前分组按钮显示「正在截图中 x/y」进度，并使用 `finally` 保证任务结束后恢复按钮
+  - 截图完成后记得恢复页面原始滚动位置与 `scrollBehavior`
 - 自动填表功能依赖外部 LLM 服务，请确保网络可访问并正确配置 API Key
 - 模块间通过全局对象通信（`Recorder`、`TreeSelectHandler`、`EventMonitor`、`MessageHandler`、`RecordManager`、`AutoFillUI`、`UploadService`、`PopupManager`、`LLMService`），每个函数注释中标注了调用位置
 

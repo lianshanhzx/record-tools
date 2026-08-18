@@ -26,7 +26,97 @@ const MessageHandler = {
   }
 }
 
-let screenshotOriginalScrollBehavior = null
+let screenshotScrollState = null
+
+function getScreenshotDocumentSize() {
+  const root = document.documentElement
+  const body = document.body
+  return {
+    width: Math.max(root.scrollWidth, body ? body.scrollWidth : 0, root.clientWidth),
+    height: Math.max(root.scrollHeight, body ? body.scrollHeight : 0, root.clientHeight)
+  }
+}
+
+function getScreenshotScrollTarget() {
+  const documentScroller = document.scrollingElement || document.documentElement
+  const viewportArea = Math.max(1, window.innerWidth * window.innerHeight)
+  const documentRange = Math.max(0, documentScroller.scrollHeight - documentScroller.clientHeight)
+  const documentTarget = { element: documentScroller, isDocument: true, score: viewportArea }
+  let best = null
+
+  const candidates = document.body ? [document.body, ...document.querySelectorAll('body *')] : []
+  for (const element of candidates) {
+    if (element === documentScroller) continue
+    const style = getComputedStyle(element)
+    if (!/(auto|scroll|overlay)/.test(style.overflowY)) continue
+
+    const scrollRange = element.scrollHeight - element.clientHeight
+    if (scrollRange <= 2 || element.clientWidth <= 0 || element.clientHeight <= 0) continue
+
+    const rect = element.getBoundingClientRect()
+    const contentLeft = rect.left + element.clientLeft
+    const contentTop = rect.top + element.clientTop
+    const contentRight = contentLeft + element.clientWidth
+    const contentBottom = contentTop + element.clientHeight
+    if (contentLeft < -1 || contentTop < -1 || contentRight > window.innerWidth + 1 || contentBottom > window.innerHeight + 1) continue
+
+    const visibleWidth = Math.min(rect.right, window.innerWidth) - Math.max(rect.left, 0)
+    const visibleHeight = Math.min(rect.bottom, window.innerHeight) - Math.max(rect.top, 0)
+    if (visibleWidth <= 0 || visibleHeight <= 0) continue
+
+    const visibleArea = visibleWidth * visibleHeight
+    if (visibleWidth < window.innerWidth * 0.25 || visibleHeight < window.innerHeight * 0.25 || visibleArea < viewportArea * 0.15) continue
+
+    const score = visibleArea * Math.min(4, element.scrollHeight / Math.max(1, element.clientHeight))
+    if (!best || score > best.score) {
+      best = { element, isDocument: false, score, visibleArea, scrollRange }
+    }
+  }
+  if (!best) return documentTarget
+  if (documentRange <= 2) return best
+
+  const documentHasMinorOverflow = documentRange < window.innerHeight * 0.5
+  const internalIsPrimary = best.visibleArea >= viewportArea * 0.35 && best.scrollRange > documentRange * 2
+  return documentHasMinorOverflow && internalIsPrimary ? best : documentTarget
+}
+
+function getScreenshotTargetMetrics() {
+  const state = screenshotScrollState
+  if (!state || state.isDocument) {
+    const size = getScreenshotDocumentSize()
+    return {
+      scrollX: window.scrollX,
+      scrollY: window.scrollY,
+      documentWidth: size.width,
+      documentHeight: size.height,
+      viewportWidth: window.innerWidth,
+      viewportHeight: window.innerHeight,
+      maxScrollY: Math.max(0, size.height - window.innerHeight),
+      captureRect: null
+    }
+  }
+
+  const element = state.element
+  const rect = element.getBoundingClientRect()
+  const contentLeft = rect.left + element.clientLeft
+  const contentTop = rect.top + element.clientTop
+  const left = Math.max(0, contentLeft)
+  const top = Math.max(0, contentTop)
+  const right = Math.min(window.innerWidth, contentLeft + element.clientWidth)
+  const bottom = Math.min(window.innerHeight, contentTop + element.clientHeight)
+  const width = Math.max(0, right - left)
+  const height = Math.max(0, bottom - top)
+  return {
+    scrollX: element.scrollLeft,
+    scrollY: element.scrollTop,
+    documentWidth: element.scrollWidth,
+    documentHeight: element.scrollHeight,
+    viewportWidth: width,
+    viewportHeight: height,
+    maxScrollY: Math.max(0, element.scrollHeight - element.clientHeight),
+    captureRect: { left, top, width, height }
+  }
+}
 
 // ==================== 与 popup / background 的消息监听 ====================
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
@@ -44,41 +134,51 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   // 全页截图：由 popup 控制滚动，content 只负责页面坐标与滚动位置恢复。
   if (request.type === 'prepareFullPageScreenshot') {
     const root = document.documentElement
-    const body = document.body
-    screenshotOriginalScrollBehavior = root.style.scrollBehavior
+    const target = getScreenshotScrollTarget()
+    screenshotScrollState = {
+      element: target.element,
+      isDocument: target.isDocument,
+      scrollX: target.isDocument ? window.scrollX : target.element.scrollLeft,
+      scrollY: target.isDocument ? window.scrollY : target.element.scrollTop,
+      windowScrollX: window.scrollX,
+      windowScrollY: window.scrollY,
+      rootScrollBehavior: root.style.scrollBehavior,
+      targetScrollBehavior: target.isDocument ? null : target.element.style.scrollBehavior
+    }
     root.style.scrollBehavior = 'auto'
-    sendResponse({
-      scrollX: window.scrollX,
-      scrollY: window.scrollY,
-      viewportWidth: window.innerWidth,
-      viewportHeight: window.innerHeight,
-      documentWidth: Math.max(root.scrollWidth, body ? body.scrollWidth : 0, root.clientWidth),
-      documentHeight: Math.max(root.scrollHeight, body ? body.scrollHeight : 0, root.clientHeight),
+    if (!target.isDocument) target.element.style.scrollBehavior = 'auto'
+    const metrics = getScreenshotTargetMetrics()
+    sendResponse(Object.assign(metrics, {
+      windowWidth: window.innerWidth,
+      windowHeight: window.innerHeight,
       devicePixelRatio: window.devicePixelRatio || 1
-    })
+    }))
     return true
   }
   if (request.type === 'scrollForScreenshot') {
-    window.scrollTo(request.x || 0, request.y || 0)
+    const state = screenshotScrollState
+    if (state && !state.isDocument) {
+      state.element.scrollTo(request.x || 0, request.y || 0)
+    } else {
+      window.scrollTo(request.x || 0, request.y || 0)
+    }
     // 两帧后响应，给布局、懒加载和浏览器绘制一次稳定机会。
     requestAnimationFrame(() => requestAnimationFrame(() => {
       setTimeout(() => {
-        const root = document.documentElement
-        const body = document.body
-        sendResponse({
-          scrollX: window.scrollX,
-          scrollY: window.scrollY,
-          documentHeight: Math.max(root.scrollHeight, body ? body.scrollHeight : 0, root.clientHeight),
-          viewportHeight: window.innerHeight
-        })
+        sendResponse(getScreenshotTargetMetrics())
       }, 180)
     }))
     return true
   }
   if (request.type === 'restoreScrollAfterScreenshot') {
-    window.scrollTo(request.x || 0, request.y || 0)
-    document.documentElement.style.scrollBehavior = screenshotOriginalScrollBehavior || ''
-    screenshotOriginalScrollBehavior = null
+    const state = screenshotScrollState
+    if (state && !state.isDocument) {
+      if (state.element.isConnected) state.element.scrollTo(state.scrollX, state.scrollY)
+      state.element.style.scrollBehavior = state.targetScrollBehavior || ''
+    }
+    window.scrollTo(state ? state.windowScrollX : request.x || 0, state ? state.windowScrollY : request.y || 0)
+    document.documentElement.style.scrollBehavior = state ? state.rootScrollBehavior || '' : ''
+    screenshotScrollState = null
     sendResponse({ ok: true })
     return true
   }

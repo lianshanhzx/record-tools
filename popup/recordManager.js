@@ -19,6 +19,8 @@ const RecordManager = {
   displayRoots: [],
   // 分组折叠状态，key 为组节点 key，true 表示折叠（默认展开）
   groupCollapseState: {},
+  screenshotCaptureGroupKey: null,
+  screenshotCaptureText: '正在截图中',
 
   /**
    * 更新录制计数显示。
@@ -200,13 +202,15 @@ const RecordManager = {
       const typeLabel = typeLabels[node.type] || '分组'
       const indent = 16 + depth * 14
       const screenshotCount = self.getGroupScreenshotCount(node.key)
+      const screenshotDisabled = self.screenshotCaptureGroupKey !== null ? ' disabled' : ''
+      const screenshotText = self.screenshotCaptureGroupKey === node.key ? self.screenshotCaptureText : '截图'
       html += '<div class="list-group-header group-type-' + escHtml(node.type) + '" data-group-key="' + escHtml(node.key) + '" style="padding-left:' + indent + 'px">'
       html += '<span class="group-arrow">' + (collapsed ? '▸' : '▾') + '</span>'
       html += '<span class="group-type-badge">' + escHtml(typeLabel) + '</span>'
       html += '<span class="group-name" title="' + escHtml(node.name) + '">' + escHtml(node.name) + '</span>'
       html += '<span class="group-count">' + node.count + ' 条</span>'
       html += '<button type="button" class="group-screenshot-list" data-group-key="' + escHtml(node.key) + '">截图 ' + screenshotCount + '</button>'
-      html += '<button type="button" class="group-screenshot-btn" data-group-key="' + escHtml(node.key) + '">截图</button>'
+      html += '<button type="button" class="group-screenshot-btn" data-group-key="' + escHtml(node.key) + '"' + screenshotDisabled + '>' + escHtml(screenshotText) + '</button>'
       html += '<button type="button" class="group-delete-btn" data-group-key="' + escHtml(node.key) + '">删除</button>'
       html += '</div>'
     }
@@ -479,6 +483,17 @@ const RecordManager = {
     return this.getGroupScreenshots(groupKey).length
   },
 
+  setScreenshotCaptureState(groupKey, text) {
+    this.screenshotCaptureGroupKey = groupKey || null
+    this.screenshotCaptureText = text || '正在截图中'
+    document.querySelectorAll('.group-screenshot-btn').forEach(button => {
+      button.disabled = this.screenshotCaptureGroupKey !== null
+      button.textContent = button.getAttribute('data-group-key') === this.screenshotCaptureGroupKey
+        ? this.screenshotCaptureText
+        : '截图'
+    })
+  },
+
   addGroupScreenshot(groupKey, screenshotPath) {
     if (!this.groupScreenshots[groupKey]) this.groupScreenshots[groupKey] = []
     this.groupScreenshots[groupKey].push(screenshotPath)
@@ -648,17 +663,16 @@ const RecordManager = {
         return
       }
 
-      button.disabled = true
-      const originalText = button.textContent
+      self.setScreenshotCaptureState(groupKey, '正在截图中')
       try {
         const screenshotPath = await ScreenshotService.captureFullPage(tab, groupNode, (current, total) => {
-          button.textContent = '截图中 ' + current + '/' + total
+          self.setScreenshotCaptureState(groupKey, '正在截图中 ' + current + '/' + total)
         })
         self.addGroupScreenshot(groupKey, screenshotPath)
       } catch (error) {
         alert('截图失败: ' + error.message)
-        button.disabled = false
-        button.textContent = originalText
+      } finally {
+        self.setScreenshotCaptureState(null)
       }
     })
 
