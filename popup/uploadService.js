@@ -24,20 +24,18 @@ const UploadService = {
    * 调用位置：popup/index.js → downloadAllElementsBtn 点击
    */
   async downloadAllElements() {
-    // 调用 popup/index.js → getCurrentTab
     const tab = await getCurrentTab()
     if (!tab || !tab.id) { alert('无法获取当前标签页'); return }
 
-    // 调用 popup/index.js → sendToContent
-    const resp = await sendToContent(tab.id, { type: 'getScannedElements' })
-    if (!resp || !resp.elements || resp.elements.length === 0) {
+    const elements = RecordManager.scannedElementList || []
+    if (elements.length === 0) {
       alert('暂无扫描元素，请先点击"开始录制"进行扫描')
       return
     }
 
     // 按显示区域（弹窗/页签/折叠面板）构建树形结构
     const tree = (typeof ElementGrouper !== 'undefined')
-      ? ElementGrouper.buildTree(resp.elements)
+      ? ElementGrouper.buildTree(elements)
       : []
 
     const payload = JSON.stringify({
@@ -45,7 +43,7 @@ const UploadService = {
       name: 'scanned-elements-tree',
       url: RecordManager.recordDataUrl || tab.url || '',
       scannedAt: Date.now(),
-      elementCount: resp.elements.length,
+      elementCount: elements.length,
       tree: tree
     }, null, 2)
 

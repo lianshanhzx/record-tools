@@ -11,6 +11,7 @@
 const RecordManager = {
   recordActionList: [],
   recordInfoLit: [],
+  scannedElementList: [],
   currentRecordInfo: {},
   recordDataUrl: '',
   // key 为分组节点 key，value 为该分组下的截图相对地址数组。
@@ -21,6 +22,32 @@ const RecordManager = {
   groupCollapseState: {},
   screenshotCaptureGroupKey: null,
   screenshotCaptureText: '正在截图中',
+  currentPageKey: '',
+  pageOrderMap: new Map(),
+  nextPageOrder: 0,
+
+  ensurePageOrder(item) {
+    const pageKey = item && item.pageKey ? item.pageKey : ''
+    if (!this.pageOrderMap.has(pageKey)) {
+      this.pageOrderMap.set(pageKey, this.nextPageOrder++)
+    }
+    item.pageOrder = this.pageOrderMap.get(pageKey)
+    return item.pageOrder
+  },
+
+  mergeScannedElements(elements) {
+    for (const incoming of elements || []) {
+      this.ensurePageOrder(incoming)
+      const index = this.scannedElementList.findIndex(item =>
+        item.target === incoming.target &&
+        (item.anchorTarget || '') === (incoming.anchorTarget || '') &&
+        (item.pageKey || '') === (incoming.pageKey || '')
+      )
+      if (index >= 0) this.scannedElementList[index] = Object.assign({}, this.scannedElementList[index], incoming)
+      else this.scannedElementList.push(Object.assign({}, incoming))
+    }
+    this.scannedElementList = this.sortByScanIndex(this.scannedElementList)
+  },
 
   /**
    * 更新录制计数显示。
@@ -118,7 +145,7 @@ const RecordManager = {
         return ownPath.length > 0 ? ownPath : [pageGroup]
       }
 
-      const anchor = anchorByTarget.get(item.anchorTarget)
+      const anchor = anchorByTarget.get((item.pageKey || '') + '\n' + item.anchorTarget)
       if (!anchor) return ownPath.length > 0 ? ownPath : [pageGroup]
 
       const anchorPath = normalizePath(anchor)
@@ -151,7 +178,7 @@ const RecordManager = {
       const anchorByTarget = new Map()
 
       ;(items || []).forEach(item => {
-        if (item.target) anchorByTarget.set(item.target, item)
+        if (item.target) anchorByTarget.set((item.pageKey || '') + '\n' + item.target, item)
       })
 
       function ensurePath(path) {
@@ -168,6 +195,7 @@ const RecordManager = {
               key: nodeKey,
               type: g.type || 'group',
               name: g.name || '分组',
+              url: g.url || '',
               path: parent ? parent.path.concat([g]) : [g],
               entries: [],
               count: 0
@@ -202,12 +230,15 @@ const RecordManager = {
       const typeLabel = typeLabels[node.type] || '分组'
       const indent = 16 + depth * 14
       const screenshotCount = self.getGroupScreenshotCount(node.key)
-      const screenshotDisabled = self.screenshotCaptureGroupKey !== null ? ' disabled' : ''
+      const nodePageKey = node.path && node.path[0] ? node.path[0].key : ''
+      const isHistoricalPage = !!self.currentPageKey && nodePageKey !== self.currentPageKey
+      const screenshotDisabled = self.screenshotCaptureGroupKey !== null || isHistoricalPage ? ' disabled' : ''
       const screenshotText = self.screenshotCaptureGroupKey === node.key ? self.screenshotCaptureText : '截图'
+      const groupTitle = node.type === 'page' && node.url ? node.name + ' - ' + node.url : node.name
       html += '<div class="list-group-header group-type-' + escHtml(node.type) + '" data-group-key="' + escHtml(node.key) + '" style="padding-left:' + indent + 'px">'
       html += '<span class="group-arrow">' + (collapsed ? '▸' : '▾') + '</span>'
       html += '<span class="group-type-badge">' + escHtml(typeLabel) + '</span>'
-      html += '<span class="group-name" title="' + escHtml(node.name) + '">' + escHtml(node.name) + '</span>'
+      html += '<span class="group-name" title="' + escHtml(groupTitle) + '">' + escHtml(node.name) + '</span>'
       html += '<span class="group-count">' + node.count + ' 条</span>'
       html += '<button type="button" class="group-screenshot-list" data-group-key="' + escHtml(node.key) + '">截图 ' + screenshotCount + '</button>'
       html += '<button type="button" class="group-screenshot-btn" data-group-key="' + escHtml(node.key) + '"' + screenshotDisabled + '>' + escHtml(screenshotText) + '</button>'
@@ -293,6 +324,9 @@ const RecordManager = {
    */
   sortByScanIndex(data) {
     return (data || []).slice().sort((a, b) => {
+      const pageA = typeof a.pageOrder === 'number' ? a.pageOrder : 0
+      const pageB = typeof b.pageOrder === 'number' ? b.pageOrder : 0
+      if (pageA !== pageB) return pageA - pageB
       const hasA = typeof a.scanIndex === 'number'
       const hasB = typeof b.scanIndex === 'number'
       if (hasA && hasB) return a.scanIndex - b.scanIndex
@@ -317,21 +351,24 @@ const RecordManager = {
   /**
    * 同一 XPath 可在不同按钮锚点下重复出现，只有 target 和 anchorTarget 都相同才视为同一记录。
    */
-  findContextRecordIndex(target, anchorTarget) {
+  findContextRecordIndex(target, anchorTarget, pageKey) {
     if (!target) return -1
     const anchor = anchorTarget || ''
     return this.recordActionList.findIndex(item => {
-      return item.target === target && (item.anchorTarget || '') === anchor
+      return item.target === target &&
+        (item.anchorTarget || '') === anchor &&
+        (item.pageKey || '') === (pageKey || '')
     })
   },
 
   /**
    * 同名去重只在同一锚点上下文内执行，不同按钮打开的复用弹窗保留各自原始字段名。
    */
-  computedSameContextName(list, name, anchorTarget) {
+  computedSameContextName(list, name, anchorTarget, pageKey) {
     const anchor = anchorTarget || ''
     return list.filter(item => {
-      if ((item.anchorTarget || '') !== anchor || !item.propertiesName) return false
+      if ((item.anchorTarget || '') !== anchor ||
+          (item.pageKey || '') !== (pageKey || '') || !item.propertiesName) return false
       const arr = item.propertiesName.split('-')
       return arr[0] === name
     }).length
@@ -344,9 +381,11 @@ const RecordManager = {
   handleMessage(message) {
     if (message.type !== 'addActionData' && message.type !== 'startRecord' && message.type !== 'addScannedElements') return;
     if (message.type === 'addActionData') {
+      this.ensurePageOrder(message.data)
       const target = message.data.target
       const name = message.data.propertiesName
-      const byTarget = this.findContextRecordIndex(target, message.data.anchorTarget)
+      this.currentPageKey = message.data.pageKey || this.currentPageKey
+      const byTarget = this.findContextRecordIndex(target, message.data.anchorTarget, message.data.pageKey)
       if (byTarget >= 0) {
         this.recordActionList[byTarget] = {
           ...this.recordActionList[byTarget],
@@ -357,6 +396,8 @@ const RecordManager = {
           group: message.data.group || this.recordActionList[byTarget].group,
           kind: message.data.kind || this.recordActionList[byTarget].kind,
           scanIndex: typeof message.data.scanIndex === 'number' ? message.data.scanIndex : this.recordActionList[byTarget].scanIndex,
+          pageUrl: message.data.pageUrl || this.recordActionList[byTarget].pageUrl,
+          pageOrder: typeof message.data.pageOrder === 'number' ? message.data.pageOrder : this.recordActionList[byTarget].pageOrder,
           options: message.data.options && message.data.options.length > 0
             ? message.data.options : this.recordActionList[byTarget].options,
           anchorTarget: message.data.anchorTarget || this.recordActionList[byTarget].anchorTarget,
@@ -366,7 +407,7 @@ const RecordManager = {
         }
       } else {
         if (this.recordActionList.length > 0) {
-          const cnt = this.computedSameContextName(this.recordActionList, name, message.data.anchorTarget)
+          const cnt = this.computedSameContextName(this.recordActionList, name, message.data.anchorTarget, message.data.pageKey)
           if (cnt > 0) message.data.propertiesName = name + '-' + cnt
         }
         message.data.recorded = true
@@ -379,10 +420,19 @@ const RecordManager = {
       this.updateRecordCount()
     } else if (message.type === 'addScannedElements') {
       const elements = message.data || []
+      this.currentPageKey = message.currentPageKey || this.currentPageKey
+      if (message.replacePageKey) {
+        this.scannedElementList = this.scannedElementList.filter(item => item.pageKey !== message.replacePageKey)
+        this.recordActionList = this.recordActionList.filter(item =>
+          item.pageKey !== message.replacePageKey || item.manualRecord === true
+        )
+      }
+      this.mergeScannedElements(elements)
       for (const el of elements) {
+        this.ensurePageOrder(el)
         const target = el.target
         const name = el.propertiesName
-        const byTarget = this.findContextRecordIndex(target, el.anchorTarget)
+        const byTarget = this.findContextRecordIndex(target, el.anchorTarget, el.pageKey)
         if (byTarget >= 0) {
           this.recordActionList[byTarget] = {
             ...this.recordActionList[byTarget],
@@ -392,6 +442,8 @@ const RecordManager = {
             group: el.group || this.recordActionList[byTarget].group,
             kind: el.kind || this.recordActionList[byTarget].kind,
             scanIndex: typeof el.scanIndex === 'number' ? el.scanIndex : this.recordActionList[byTarget].scanIndex,
+            pageUrl: el.pageUrl || this.recordActionList[byTarget].pageUrl,
+            pageOrder: typeof el.pageOrder === 'number' ? el.pageOrder : this.recordActionList[byTarget].pageOrder,
             options: el.options && el.options.length > 0
               ? el.options : this.recordActionList[byTarget].options,
             anchorTarget: el.anchorTarget || this.recordActionList[byTarget].anchorTarget,
@@ -401,7 +453,7 @@ const RecordManager = {
           }
         } else {
           if (this.recordActionList.length > 0) {
-            const cnt = this.computedSameContextName(this.recordActionList, name, el.anchorTarget)
+            const cnt = this.computedSameContextName(this.recordActionList, name, el.anchorTarget, el.pageKey)
             if (cnt > 0) el.propertiesName = name + '-' + cnt
           }
           // 扫描阶段：按钮默认隐藏，其他元素默认显示；均未人工录制
@@ -416,7 +468,7 @@ const RecordManager = {
       this.renderRecordList(this.recordInfoLit)
       this.updateRecordCount()
     } else if (message.type === 'startRecord') {
-      this.recordDataUrl = message.data
+      if (!this.recordDataUrl) this.recordDataUrl = message.data
     }
   },
 
@@ -428,12 +480,16 @@ const RecordManager = {
     document.getElementById('listBody').innerHTML = ''
     this.recordActionList = []
     this.recordInfoLit = []
+    this.scannedElementList = []
     this.currentRecordInfo = {}
     this.recordDataUrl = ''
     this.groupScreenshots = {}
     this.displayGroupMap = new Map()
     this.displayRoots = []
     this.groupCollapseState = {}
+    this.currentPageKey = ''
+    this.pageOrderMap = new Map()
+    this.nextPageOrder = 0
     this.updateRecordCount()
   },
 
@@ -487,8 +543,12 @@ const RecordManager = {
     this.screenshotCaptureGroupKey = groupKey || null
     this.screenshotCaptureText = text || '正在截图中'
     document.querySelectorAll('.group-screenshot-btn').forEach(button => {
-      button.disabled = this.screenshotCaptureGroupKey !== null
-      button.textContent = button.getAttribute('data-group-key') === this.screenshotCaptureGroupKey
+      const groupKey = button.getAttribute('data-group-key')
+      const node = this.getGroupNode(groupKey)
+      const nodePageKey = node && node.path && node.path[0] ? node.path[0].key : ''
+      const isHistoricalPage = !!this.currentPageKey && nodePageKey !== this.currentPageKey
+      button.disabled = this.screenshotCaptureGroupKey !== null || isHistoricalPage
+      button.textContent = groupKey === this.screenshotCaptureGroupKey
         ? this.screenshotCaptureText
         : '截图'
     })
@@ -527,6 +587,10 @@ const RecordManager = {
         type,
         options,
         scanIndex,
+        pageKey,
+        pageUrl,
+        routeIdentity,
+        pageOrder,
         ...action
       } = item
       const attr = Object.assign({}, attributes || {})
@@ -551,6 +615,7 @@ const RecordManager = {
         type: node.type,
         key: node.key,
         name: node.name,
+        url: node.url || '',
         screenshots: (screenshots[node.key] || []).slice()
       })
 

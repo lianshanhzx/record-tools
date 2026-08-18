@@ -233,6 +233,13 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
               group = ElementGrouper.getGroupPath(el)
             }
           } catch (e) { }
+          let pageContext = null
+          try {
+            if (typeof PageElementScannerController !== 'undefined' &&
+                typeof PageElementScannerController.getCurrentPageContext === 'function') {
+              pageContext = PageElementScannerController.getCurrentPageContext()
+            }
+          } catch (e) {}
           // 调用 messageHandler.js → sendBackMessage
           chrome.runtime.sendMessage({
             type: 'addActionData',
@@ -244,6 +251,10 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
               value: r.value || '',
               propertiesName: r.label || '',
               group: group,
+              pageKey: pageContext ? pageContext.key : '',
+              pageUrl: pageContext ? pageContext.url : window.location.href,
+              routeIdentity: pageContext ? pageContext.routeIdentity : '',
+              pageOrder: pageContext ? pageContext.pageOrder : 0,
               id: AutoFormFill._uuid(),
               timestamp: Date.now(),
               attributes: { value: r.value || '', type: 'ATTRIBUTE' }

@@ -184,6 +184,14 @@ const Recorder = {
       console.warn('[Recorder] 计算分组路径失败:', e)
     }
 
+    let pageContext = null
+    try {
+      if (typeof PageElementScannerController !== 'undefined' &&
+          typeof PageElementScannerController.getCurrentPageContext === 'function') {
+        pageContext = PageElementScannerController.getCurrentPageContext()
+      }
+    } catch (e) {}
+
     return {
       id: id,
       action: actionType,
@@ -193,6 +201,10 @@ const Recorder = {
       tagName: element.tagName.toLowerCase(),
       propertiesName: labelChName || '',
       group: group,
+      pageKey: pageContext ? pageContext.key : '',
+      pageUrl: pageContext ? pageContext.url : window.location.href,
+      routeIdentity: pageContext ? pageContext.routeIdentity : '',
+      pageOrder: pageContext ? pageContext.pageOrder : 0,
       attributes: attributes
     };
   },

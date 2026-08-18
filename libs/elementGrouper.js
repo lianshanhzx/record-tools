@@ -35,6 +35,34 @@ const ElementGrouper = (function () {
   const PAGE_GROUP_KEY = '__page__'
 
   /**
+   * 生成用于区分业务页面的路由标识。
+   * 普通 URL 忽略查询参数；Hash Router 仅保留 hash 中的路径部分。
+   */
+  function getRouteIdentity(locationLike) {
+    const loc = locationLike || window.location
+    const origin = loc.origin || ''
+    const pathname = loc.pathname || '/'
+    const hash = loc.hash || ''
+    let hashPath = ''
+    if (hash.indexOf('#/') === 0 || hash.indexOf('#!/') === 0) {
+      hashPath = hash.replace(/^#!?/, '').split('?')[0]
+    }
+    return origin + pathname + (hashPath ? '#' + hashPath : '')
+  }
+
+  function getCurrentPageContext() {
+    const routeIdentity = getRouteIdentity(window.location)
+    return {
+      type: 'page',
+      name: '主页面',
+      key: PAGE_GROUP_KEY + ':' + encodeURIComponent(routeIdentity),
+      fixedKey: true,
+      url: window.location.href,
+      routeIdentity: routeIdentity
+    }
+  }
+
+  /**
    * 分组容器识别配置。
    * 一个节点只识别为第一种命中的类型（规则按优先级排列）。
    * 选择器与 content/pageElementScannerController.js 中的显著 UI 容器保持对齐。
@@ -234,14 +262,15 @@ const ElementGrouper = (function () {
    *
    * 从元素向上遍历祖先链，收集命中的分组容器，
    * 返回按"最外层 -> 最内层"排列的分组路径数组。
-   * 不属于任何容器时返回空数组（popup 侧归入"主页面"默认组）。
+   * 路径第一层始终为当前路由对应的"主页面"，其后追加 DOM 容器分组。
    *
    * @param {Element} element 目标元素
    * @returns {Array<{type: string, name: string, key: string}>} 分组路径
    */
   function getGroupPath(element) {
-    if (!element || !element.parentElement) return []
-    const path = []
+    const page = getCurrentPageContext()
+    if (!element || !element.parentElement) return [page]
+    const path = [page]
     let node = element.parentElement
     while (node && node !== document.body && node !== document.documentElement) {
       const type = matchContainerType(node)
@@ -322,6 +351,8 @@ const ElementGrouper = (function () {
   return {
     GROUP_TYPE_LABELS: GROUP_TYPE_LABELS,
     PAGE_GROUP_KEY: PAGE_GROUP_KEY,
+    getRouteIdentity: getRouteIdentity,
+    getCurrentPageContext: getCurrentPageContext,
     getGroupPath: getGroupPath,
     buildTree: buildTree
   }

@@ -678,6 +678,13 @@ const PageElementScanner = (function () {
     // ---- 下拉框选项提取 ----
     const options = kind === 'select' ? extractSelectOptions(element, targetElement) : []
 
+    let pageContext = null
+    try {
+      if (typeof ElementGrouper !== 'undefined' && typeof ElementGrouper.getCurrentPageContext === 'function') {
+        pageContext = ElementGrouper.getCurrentPageContext()
+      }
+    } catch (e) {}
+
     return {
       id: uuid(),
       command: getCommandByKind(kind),
@@ -696,6 +703,9 @@ const PageElementScanner = (function () {
       readonly: readonly,
       type: inputType,
       group: group,
+      pageKey: pageContext ? pageContext.key : '',
+      pageUrl: pageContext ? pageContext.url : window.location.href,
+      routeIdentity: pageContext ? pageContext.routeIdentity : '',
       options: options,
       position: getPagePosition(targetElement),
       timestamp: Date.now()

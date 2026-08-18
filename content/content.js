@@ -13,6 +13,9 @@
 // 若是，则自动恢复录制事件监听（用于刷新页面后继续录制）。
 chrome.runtime.sendMessage({ type: "initMonitor" }, (response) => {
   if (response && response.monitorStates) {
+    if (response.popupOpen && typeof PageElementScannerController !== 'undefined') {
+      PageElementScannerController.onPopupOpened()
+    }
     startRecordEvent()
   }
 })
@@ -32,6 +35,7 @@ function startRecordEvent() {
 
   // 调用 eventMonitor.js → listener
   EventMonitor.listener(document)
+  if (typeof PageElementScannerController !== 'undefined') PageElementScannerController.resume()
 }
 
 /**
@@ -39,8 +43,10 @@ function startRecordEvent() {
  * 调用位置：content/messageHandler.js → onMessage (continueRecording)
  */
 function continueRecordEvent() {
+  MessageHandler.sendBackMessage('startRecord', window.location.href)
   // 调用 eventMonitor.js → listener
   EventMonitor.listener(document)
+  if (typeof PageElementScannerController !== 'undefined') PageElementScannerController.resume()
 }
 
 /**
@@ -56,6 +62,7 @@ function pauseRecordEvent() {
   })
   // 调用 recorder.js → destroy
   Recorder.destroy()
+  if (typeof PageElementScannerController !== 'undefined') PageElementScannerController.pause()
   // 调用 messageHandler.js → sendBackMessage
   MessageHandler.sendBackMessage('stopRecord', actions);
 }
@@ -73,6 +80,7 @@ function stopRecordEvent() {
   })
   // 调用 recorder.js → destroy
   Recorder.destroy()
+  if (typeof PageElementScannerController !== 'undefined') PageElementScannerController.pause()
   // 调用 messageHandler.js → sendBackMessage
   MessageHandler.sendBackMessage('stopRecord', actions);
 }

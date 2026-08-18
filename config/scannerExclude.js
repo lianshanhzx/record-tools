@@ -22,13 +22,28 @@ const PageElementScannerExcludeConfig = (function () {
     // 排除区域的 CSS 选择器列表 , 可以浏览器检查中选中元素然后复制元素的选择器(copy selector)
     // 元素自身或其任一祖先命中该选择器，则跳过。
     excludedSelectors: [
-      '#app > div > section > div.headerbox' //信贷系统的顶部栏内容
+      '#app > div > section > div.headerbox', //信贷系统的顶部栏内容
+      'table', // 表格(table)内的元素不扫描
+      // 翻页相关组件不扫描
+      '.el-pagination',      // Element UI 分页
+      '.el-pager',           // Element UI 页码区
+      '.ant-pagination',     // Ant Design 分页
+      '.ivu-page',           // iView 分页
+      '.pagination',         // Bootstrap 等通用分页
+      '.page-link',          // 通用分页链接
+      '.page-item',          // 通用分页项
+      '.layui-laypage'       // layui 分页
     ],
 
     // 排除关键词列表
     // 匹配元素的 label / placeholder / title / value 时，跳过该元素。
     excludedKeywords: [
-      // 例如：'退出', '关闭', '取消'
+      // 翻页导航按钮文案
+      '下一页',
+      '上一页',
+      '首页',
+      '尾页',
+      '末页'
     ]
   }
 })()

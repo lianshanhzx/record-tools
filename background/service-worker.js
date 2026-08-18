@@ -11,6 +11,7 @@ importScripts('popupManager.js', 'llmService.js')
 
 // ==================== 全局状态 ====================
 let monitorStates = {}
+const RECORDING_TAB_IDS_KEY = 'recordingTabIds'
 
 // 这些消息的目标是 Popup，Background 无需处理，短路返回避免穿透所有分支
 const SKIP_IN_BG = ['addActionData', 'actionProgress', 'actionComplete', 'addScannedElements', 'scanStatus']
@@ -47,16 +48,31 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (requestType == 'stopRecord') {
     const tabId = sender.tab.id
     delete monitorStates[tabId]
+    chrome.storage.session.get(RECORDING_TAB_IDS_KEY).then(stored => {
+      const ids = (stored[RECORDING_TAB_IDS_KEY] || []).filter(id => id !== tabId)
+      return chrome.storage.session.set({ [RECORDING_TAB_IDS_KEY]: ids })
+    })
   } else if (requestType === 'startRecord') {
     // 开始录制 → 标记该标签页正在录制
     const tabId = sender.tab.id
     monitorStates[tabId] = true
+    chrome.storage.session.get(RECORDING_TAB_IDS_KEY).then(stored => {
+      const ids = stored[RECORDING_TAB_IDS_KEY] || []
+      if (!ids.includes(tabId)) ids.push(tabId)
+      return chrome.storage.session.set({ [RECORDING_TAB_IDS_KEY]: ids })
+    })
   } else if (requestType === 'initMonitor') {
     // 查询录制状态 → 返回标签页是否正在录制
     const tabId = sender.tab.id
-    const tabMonitorStates = monitorStates[tabId] || false
-    console.log('---initMonitor---', tabMonitorStates)
-    sendResponse({ 'monitorStates': tabMonitorStates })
+    chrome.storage.session.get([RECORDING_TAB_IDS_KEY, 'popupTargetTabId']).then(stored => {
+      const tabMonitorStates = monitorStates[tabId] || (stored[RECORDING_TAB_IDS_KEY] || []).includes(tabId)
+      if (tabMonitorStates) monitorStates[tabId] = true
+      console.log('---initMonitor---', tabMonitorStates)
+      sendResponse({
+        monitorStates: tabMonitorStates,
+        popupOpen: stored.popupTargetTabId === tabId
+      })
+    })
   }
 
   return true
@@ -154,3 +170,12 @@ chrome.runtime.onMessageExternal.addListener(function (request, sender, sendResp
       return PopupManager.openOpertePopup(undefined, targetTabId)
     })
 });
+
+// 标签页关闭时清理会话录制标记，避免残留状态影响后续标签页。
+chrome.tabs.onRemoved.addListener((tabId) => {
+  delete monitorStates[tabId]
+  chrome.storage.session.get(RECORDING_TAB_IDS_KEY).then(stored => {
+    const ids = (stored[RECORDING_TAB_IDS_KEY] || []).filter(id => id !== tabId)
+    return chrome.storage.session.set({ [RECORDING_TAB_IDS_KEY]: ids })
+  })
+})

@@ -28,6 +28,10 @@ const PageElementScannerController = (function () {
     minIntervalMs: 2000,
     // 按钮点击后多久内的 DOM 变化会被视为由该按钮触发
     triggerMaxAgeMs: 1500,
+    // 路由轮询及新页面渲染稳定等待
+    routeCheckMs: 300,
+    routeQuietMs: 600,
+    routeMaxWaitMs: 5000,
     // MutationObserver 配置
     observerOptions: {
       childList: true,
@@ -41,6 +45,14 @@ const PageElementScannerController = (function () {
   let observer = null
   let debounceTimer = null
   let lastScanTime = 0
+  let routeCheckTimer = null
+  let routeScanTimer = null
+  let routeMaxWaitTimer = null
+  let routeScanPending = false
+  let currentRouteIdentity = ''
+  let currentPageContext = null
+  const pageOrderMap = new Map()
+  let nextPageOrder = 0
   // 在 debounce 窗口内累积所有 mutation 的根节点，避免只扫描最后一次 mutation 的 roots
   let pendingRoots = []
 
@@ -48,7 +60,7 @@ const PageElementScannerController = (function () {
   // 录制器在此期间操作新区域内元素时，可使用该上下文与随后扫描结果保持同一锚点。
   let pendingScanAnchor = null
 
-  // 用 "元素 target + 锚点 target" 作为 key 保存扫描快照。
+  // 用 "页面 + 元素 target + 锚点 target" 作为 key 保存扫描快照。
   // 同一弹窗组件被 A/B 按钮复用时，允许同一 DOM/XPath 在不同锚点下同时保留。
   const scannedElementMap = new Map()
 
@@ -105,8 +117,28 @@ const PageElementScannerController = (function () {
     return true
   }
 
-  function makeContextKey(target, anchorTarget) {
-    return (target || '') + '\n@@anchor=' + (anchorTarget || '')
+  function getPageContext() {
+    if (typeof ElementGrouper !== 'undefined' && typeof ElementGrouper.getCurrentPageContext === 'function') {
+      return ElementGrouper.getCurrentPageContext()
+    }
+    return {
+      key: '__page__',
+      url: window.location.href,
+      routeIdentity: window.location.origin + window.location.pathname
+    }
+  }
+
+  function activatePageContext() {
+    currentPageContext = getPageContext()
+    currentRouteIdentity = currentPageContext.routeIdentity
+    if (!pageOrderMap.has(currentPageContext.key)) {
+      pageOrderMap.set(currentPageContext.key, nextPageOrder++)
+    }
+    return currentPageContext
+  }
+
+  function makeContextKey(pageKey, target, anchorTarget) {
+    return (pageKey || '') + '\n@@target=' + (target || '') + '\n@@anchor=' + (anchorTarget || '')
   }
 
   /**
@@ -222,7 +254,7 @@ const PageElementScannerController = (function () {
       clone.anchorTarget = info._anchorTarget
       let anchorName = info._anchorPropertiesName || ''
       for (const [targetEl, anchorInfo] of scannedElementMap) {
-        if (anchorInfo.target === info._anchorTarget) {
+        if (anchorInfo.pageKey === info.pageKey && anchorInfo.target === info._anchorTarget) {
           anchorName = anchorInfo.propertiesName || anchorName
           break
         }
@@ -261,6 +293,9 @@ const PageElementScannerController = (function () {
 
     // 阶段 1：按视觉位置计算基础序
     const visualSorted = entries.slice().sort((a, b) => {
+      const pageA = typeof a[1].pageOrder === 'number' ? a[1].pageOrder : 0
+      const pageB = typeof b[1].pageOrder === 'number' ? b[1].pageOrder : 0
+      if (pageA !== pageB) return pageA - pageB
       const rectA = a[1]._rect || { top: 0, left: 0 }
       const rectB = b[1]._rect || { top: 0, left: 0 }
       if (rectA.top !== rectB.top) return rectA.top - rectB.top
@@ -271,7 +306,7 @@ const PageElementScannerController = (function () {
     const idToBaseIndex = new Map()
     visualSorted.forEach((entry, idx) => {
       const info = entry[1]
-      if (info.target) targetToBaseIndex.set(info.target, idx)
+      if (info.target) targetToBaseIndex.set((info.pageKey || '') + '\n' + info.target, idx)
       idToBaseIndex.set(info.id, idx)
     })
 
@@ -280,9 +315,10 @@ const PageElementScannerController = (function () {
     const anchorGroups = new Map()
     visualSorted.forEach(entry => {
       const anchorTarget = entry[1]._anchorTarget
-      if (anchorTarget && targetToBaseIndex.has(anchorTarget)) {
-        if (!anchorGroups.has(anchorTarget)) anchorGroups.set(anchorTarget, [])
-        anchorGroups.get(anchorTarget).push(entry)
+      const anchorKey = (entry[1].pageKey || '') + '\n' + anchorTarget
+      if (anchorTarget && targetToBaseIndex.has(anchorKey)) {
+        if (!anchorGroups.has(anchorKey)) anchorGroups.set(anchorKey, [])
+        anchorGroups.get(anchorKey).push(entry)
       }
     })
     anchorGroups.forEach(items => {
@@ -296,10 +332,12 @@ const PageElementScannerController = (function () {
       const infoA = a[1], infoB = b[1]
       const baseA = idToBaseIndex.get(infoA.id)
       const baseB = idToBaseIndex.get(infoB.id)
-      const anchorBaseA = infoA._anchorTarget && targetToBaseIndex.has(infoA._anchorTarget)
-        ? targetToBaseIndex.get(infoA._anchorTarget) : null
-      const anchorBaseB = infoB._anchorTarget && targetToBaseIndex.has(infoB._anchorTarget)
-        ? targetToBaseIndex.get(infoB._anchorTarget) : null
+      const anchorKeyA = (infoA.pageKey || '') + '\n' + infoA._anchorTarget
+      const anchorKeyB = (infoB.pageKey || '') + '\n' + infoB._anchorTarget
+      const anchorBaseA = infoA._anchorTarget && targetToBaseIndex.has(anchorKeyA)
+        ? targetToBaseIndex.get(anchorKeyA) : null
+      const anchorBaseB = infoB._anchorTarget && targetToBaseIndex.has(anchorKeyB)
+        ? targetToBaseIndex.get(anchorKeyB) : null
 
       const keyA = anchorBaseA !== null
         ? [anchorBaseA, 1, anchorSubIndexMap.get(infoA.id)]
@@ -325,7 +363,7 @@ const PageElementScannerController = (function () {
       let anchorName = ''
       if (firstAnchored) {
         for (const [targetEl, info] of scannedElementMap) {
-          if (info.target === firstAnchored[1]._anchorTarget) {
+          if (info.pageKey === firstAnchored[1].pageKey && info.target === firstAnchored[1]._anchorTarget) {
             anchorName = info.propertiesName || ''
             break
           }
@@ -345,11 +383,13 @@ const PageElementScannerController = (function () {
    */
   function findCurrentInfoByElement(element) {
     if (!element) return null
+    const pageKey = currentPageContext ? currentPageContext.key : getPageContext().key
 
     let matched = null
     for (const [contextKey, info] of scannedElementMap) {
       const targetEl = info._targetElement
       if (!targetEl) continue
+      if (info.pageKey !== pageKey) continue
       if (targetEl === element || (typeof targetEl.contains === 'function' && targetEl.contains(element))) {
         const activeAnchor = activeAnchorByElement.get(targetEl)
         if (activeAnchor && info._anchorTarget === activeAnchor.target) return info
@@ -367,11 +407,12 @@ const PageElementScannerController = (function () {
         if (target) {
           const activeAnchor = activeAnchorByElement.get(element)
           if (activeAnchor) {
-            const activeInfo = scannedElementMap.get(makeContextKey(target, activeAnchor.target))
+            const activeInfo = scannedElementMap.get(makeContextKey(pageKey, target, activeAnchor.target))
             if (activeInfo) return activeInfo
           }
           for (const [contextKey, info] of scannedElementMap) {
-            if (info.target === target && (!matched || (info._contextUpdatedAt || 0) >= (matched._contextUpdatedAt || 0))) {
+            if (info.pageKey === pageKey && info.target === target &&
+                (!matched || (info._contextUpdatedAt || 0) >= (matched._contextUpdatedAt || 0))) {
               matched = info
             }
           }
@@ -409,12 +450,14 @@ const PageElementScannerController = (function () {
    * 将最新的扫描结果同步到 popup 录制记录列表。
    * 每次扫描完成后都应调用，保证 popup 列表与实际扫描结果一致。
    */
-  function notifyPopup() {
+  function notifyPopup(replacePageKey) {
     updatePublicArray()
     const elements = typeof Recorder !== 'undefined' ? Recorder.scannedPageElements.map(cloneInfo) : []
     chrome.runtime.sendMessage({
       type: 'addScannedElements',
-      data: elements
+      data: elements,
+      currentPageKey: currentPageContext ? currentPageContext.key : '',
+      replacePageKey: replacePageKey || ''
     })
     return elements.length
   }
@@ -469,16 +512,23 @@ const PageElementScannerController = (function () {
 
     notifyScanStatus('scanning', getScannedElementCount())
     pendingScanAnchor = null
-    scannedElementMap.clear()
+    const page = activatePageContext()
+    for (const [contextKey, info] of scannedElementMap) {
+      if (info.pageKey === page.key) scannedElementMap.delete(contextKey)
+    }
     activeAnchorByElement = new WeakMap()
     lastTrigger = null
     const results = scanRoot(document, reason)
     results.forEach(info => {
+      info.pageKey = page.key
+      info.pageUrl = page.url
+      info.routeIdentity = page.routeIdentity
+      info.pageOrder = pageOrderMap.get(page.key)
       info._contextUpdatedAt = Date.now()
-      scannedElementMap.set(makeContextKey(info.target, ''), info)
+      scannedElementMap.set(makeContextKey(info.pageKey, info.target, ''), info)
     })
 
-    const count = notifyPopup()
+    const count = notifyPopup(page.key)
     notifyScanStatus('completed', count)
     lastScanTime = Date.now()
   }
@@ -491,13 +541,18 @@ const PageElementScannerController = (function () {
    */
   function mergeRegionResults(regionResults, roots) {
     regionResults.forEach(info => {
+      const page = currentPageContext || activatePageContext()
+      info.pageKey = page.key
+      info.pageUrl = page.url
+      info.routeIdentity = page.routeIdentity
+      info.pageOrder = pageOrderMap.get(page.key)
       if (!info._anchorTarget && info._targetElement) {
         const activeAnchor = activeAnchorByElement.get(info._targetElement)
         if (activeAnchor) info._anchorTarget = activeAnchor.target
         if (activeAnchor) info._anchorPropertiesName = activeAnchor.name
       }
 
-      const contextKey = makeContextKey(info.target, info._anchorTarget)
+      const contextKey = makeContextKey(info.pageKey, info.target, info._anchorTarget)
       const oldInfo = scannedElementMap.get(contextKey)
       if (oldInfo && oldInfo._anchorTarget && !info._anchorTarget) {
         info._anchorTarget = oldInfo._anchorTarget
@@ -599,6 +654,58 @@ const PageElementScannerController = (function () {
     notifyScanStatus('completed', count)
     pendingScanAnchor = null
     lastScanTime = Date.now()
+  }
+
+  // ==================== 路由变化扫描 ====================
+
+  function clearRouteScanTimers() {
+    clearTimeout(routeScanTimer)
+    clearTimeout(routeMaxWaitTimer)
+    routeScanTimer = null
+    routeMaxWaitTimer = null
+  }
+
+  function executeRouteScan() {
+    if (!popupOpen || !routeScanPending) return
+    routeScanPending = false
+    clearRouteScanTimers()
+    fullScan('routeChanged', true)
+  }
+
+  function scheduleRouteScan() {
+    if (!routeScanPending) return
+    clearTimeout(routeScanTimer)
+    routeScanTimer = setTimeout(executeRouteScan, config.routeQuietMs)
+  }
+
+  function handleRouteChanged() {
+    const nextPage = getPageContext()
+    if (nextPage.routeIdentity === currentRouteIdentity) return
+
+    clearTimeout(debounceTimer)
+    debounceTimer = null
+    pendingRoots = []
+    pendingScanAnchor = null
+    lastTrigger = null
+    routeScanPending = true
+    activatePageContext()
+    clearRouteScanTimers()
+    scheduleRouteScan()
+    routeMaxWaitTimer = setTimeout(executeRouteScan, config.routeMaxWaitMs)
+    console.log('[ScannerController] 检测到路由变化，等待新页面渲染:', currentRouteIdentity)
+  }
+
+  function startRouteObserver() {
+    if (routeCheckTimer) return
+    if (!currentPageContext) activatePageContext()
+    routeCheckTimer = setInterval(handleRouteChanged, config.routeCheckMs)
+  }
+
+  function stopRouteObserver() {
+    if (routeCheckTimer) clearInterval(routeCheckTimer)
+    routeCheckTimer = null
+    routeScanPending = false
+    clearRouteScanTimers()
   }
 
   // ==================== DOM 变化识别 ====================
@@ -716,6 +823,14 @@ const PageElementScannerController = (function () {
   function onMutations(mutations) {
     if (!popupOpen) return
 
+    handleRouteChanged()
+
+    // 路由已变化时，所有 DOM 更新都用于判断新页面何时稳定，不参与旧的锚点增量扫描。
+    if (routeScanPending) {
+      scheduleRouteScan()
+      return
+    }
+
     const roots = findAffectedRoots(mutations)
     if (roots.length === 0) return
 
@@ -787,12 +902,14 @@ const PageElementScannerController = (function () {
   // ==================== 生命周期管理 ====================
 
   function startObserver() {
-    if (observer) return
-    const target = document.body || document.documentElement
-    observer = new MutationObserver(onMutations)
-    observer.observe(target, config.observerOptions)
-    clickListener = onClick
-    document.addEventListener('click', clickListener, true)
+    if (!observer) {
+      const target = document.body || document.documentElement
+      observer = new MutationObserver(onMutations)
+      observer.observe(target, config.observerOptions)
+      clickListener = onClick
+      document.addEventListener('click', clickListener, true)
+    }
+    startRouteObserver()
     console.log('[ScannerController] DOM 观察已启动')
   }
 
@@ -807,6 +924,7 @@ const PageElementScannerController = (function () {
     }
     clearTimeout(debounceTimer)
     debounceTimer = null
+    stopRouteObserver()
     pendingRoots = []
     pendingScanAnchor = null
     lastTrigger = null
@@ -818,6 +936,10 @@ const PageElementScannerController = (function () {
     activeAnchorByElement = new WeakMap()
     pendingScanAnchor = null
     lastTrigger = null
+    pageOrderMap.clear()
+    nextPageOrder = 0
+    currentPageContext = null
+    currentRouteIdentity = ''
     if (typeof Recorder !== 'undefined') {
       Recorder.scannedPageElements = []
     }
@@ -839,6 +961,24 @@ const PageElementScannerController = (function () {
     popupOpen = false
     stopObserver()
     clearData()
+  }
+
+  function pause() {
+    stopObserver()
+  }
+
+  function resume() {
+    if (!popupOpen) return
+    startObserver()
+    handleRouteChanged()
+  }
+
+  function getCurrentPageContext() {
+    const latest = getPageContext()
+    if (!currentPageContext || latest.routeIdentity !== currentRouteIdentity) activatePageContext()
+    return Object.assign({}, currentPageContext, {
+      pageOrder: pageOrderMap.get(currentPageContext.key)
+    })
   }
 
   function initMessageListener() {
@@ -881,6 +1021,9 @@ const PageElementScannerController = (function () {
     onPopupClosed: onPopupClosed,
     fullScan: fullScan,
     scanRegions: scanRegions,
+    pause: pause,
+    resume: resume,
+    getCurrentPageContext: getCurrentPageContext,
     findScannedInfoByElement: findScannedInfoByElement,
     getPendingScanAnchorByElement: getPendingScanAnchorByElement
   }
