@@ -270,7 +270,7 @@ const ElementGrouper = (function () {
   function getGroupPath(element) {
     const page = getCurrentPageContext()
     if (!element || !element.parentElement) return [page]
-    const path = [page]
+    const path = []
     let node = element.parentElement
     while (node && node !== document.body && node !== document.documentElement) {
       const type = matchContainerType(node)
@@ -281,7 +281,7 @@ const ElementGrouper = (function () {
       }
       node = node.parentElement
     }
-    return path
+    return [page].concat(path)
   }
 
   // ==================== 树形构建（popup 侧） ====================
