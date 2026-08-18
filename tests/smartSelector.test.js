@@ -67,6 +67,17 @@
     const result = assertSelector(fixtures.querySelectorAll('input')[1]);
     assert(result.strategy === 'element_ui_form_label', `实际策略为 ${result.strategy}`);
     assert(result.xpath.indexOf('联系人手机号码') !== -1, 'XPath 未使用完整标签');
+    assert(result.xpath.indexOf('el-form-item') === -1, '常规结构不应输出冗长的 form-item class 谓词');
+    assert(result.xpath.indexOf(' or ') === -1, '标签后缀不应展开为大量 or 分支');
+  });
+
+  test('证件类型表单生成紧凑 XPath', function () {
+    mount('<div class="el-form-item"><label class="el-form-item__label">证件类型：</label><div><input type="text"></div></div>');
+    const result = assertSelector(fixtures.querySelector('input'), 'element_ui_form_label');
+    assert(result.xpath.indexOf("translate(., '：:*', '')") !== -1, '未使用紧凑标签规范化谓词');
+    assert(result.xpath.indexOf('el-form-item') === -1, '不应包含 form-item class token');
+    assert(result.xpath.indexOf("[@type='text']") === -1, '不应使用低价值 type=text 条件');
+    assert(result.xpath.length < 140, `XPath 仍过长，共 ${result.xpath.length} 字符`);
   });
 
   test('稳定 name 优先于表单文案', function () {
@@ -79,6 +90,12 @@
     mount('<div class="el-form-item"><label class="el-form-item__label">客户名称：*</label><div><input></div></div>');
     const result = assertSelector(fixtures.querySelector('input'));
     assert(result.strategy === 'element_ui_form_label', `实际策略为 ${result.strategy}`);
+  });
+
+  test('非直接子级 label 使用 form-item 回退', function () {
+    mount('<div class="el-form-item"><div class="label-wrap"><label>客户等级：</label></div><div><input></div></div>');
+    const result = assertSelector(fixtures.querySelector('input'), 'element_ui_form_label_fallback');
+    assert(result.xpath.indexOf('el-form-item') !== -1, '特殊嵌套结构应保留 form-item 稳健回退');
   });
 
   test('class 使用完整 token 匹配', function () {

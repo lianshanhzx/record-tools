@@ -332,50 +332,57 @@ class SmartSelector {
     const text = normalizeFormLabel(label && (label.innerText || label.textContent));
     if (!text) return;
 
-    // 表单项谓词同时限定 el-form-item 类和精确 label 文本。
-    // 同一标签下可能命中多个 form-item（如列表重复行），由目标 leaf 进一步收窄。
-    const itemPredicate = `*[${classTokenPredicate('el-form-item')}][.//label[${this.formLabelPredicate(text)}]]`;
+    const labelPredicate = this.formLabelPredicate(text);
+    const formItemTag = formItem.tagName.toLowerCase();
+    // 常规 Element UI DOM 中 label 是 form-item 的直接子节点。优先使用标签父节点作为
+    // 作用域，可省去冗长的 el-form-item class token 谓词；严格验证失败时再使用稳健回退。
+    const compactPrefix = `//label[${labelPredicate}]/parent::*`;
+    const fallbackPrefix = `//${formItemTag}[${classTokenPredicate('el-form-item')}][.//label[${labelPredicate}]]`;
     for (const leaf of this.getFormLeafCandidates()) {
-      this.addCandidate(`//${itemPredicate}//${leaf.xpath}`, 'element_ui_form_label', leaf.score, { scope: 'form_item' });
+      this.addCandidate(`${compactPrefix}//${leaf.xpath}`, 'element_ui_form_label', leaf.score + 1, { scope: 'form_item' });
+      this.addCandidate(`${fallbackPrefix}//${leaf.xpath}`, 'element_ui_form_label_fallback', leaf.score, { scope: 'form_item' });
     }
   }
 
-  /** 单条精确 label XPath（含冒号/星号后缀变体）。 */
+  /** 单条精确 label XPath（比较前移除常见标签装饰符）。 */
   exactLabelXPath(text) {
     return `//label[${this.formLabelPredicate(text)}]`;
   }
 
   /**
-   * label 精确文本谓词。XPath 1.0 的 normalize-space() 会折叠 XML 空白，
-   * 因此这里用 normalize-space(.)= 做等值比较。后缀变体覆盖常见写法：
-   *   名称 / 名称: / 名称： / 名称* / 名称：* / 名称*： / 冒号与星号带空格等。
+   * 紧凑的 label 精确文本谓词。
+   * translate() 先移除中英文冒号和必填星号，外层 normalize-space() 再清理遗留空白，
+   * 因而一条表达式即可覆盖“名称”“名称：”“名称： *”“名称*：”等常见写法。
+   * 最终仍是等值比较，不会把“联系人”误匹配为“联系人手机号码”。
    */
   formLabelPredicate(text) {
-    const variants = [
-      text, `${text}:`, `${text}：`, `${text}*`, `${text}：*`, `${text}:*`,
-      `${text}*：`, `${text}*:`, `${text}： *`, `${text}: *`, `${text}* ：`, `${text}* :`
-    ];
-    return variants.map(value => `normalize-space(.)=${quoteXPathValue(value)}`).join(' or ');
+    return `normalize-space(translate(., '：:*', ''))=${quoteXPathValue(text)}`;
   }
 
   /**
    * form-item 内的目标控件叶子候选。
-   * 优先使用 name/type/placeholder/aria-label 限定，最后回退到裸标签。
-   * 带限定属性的叶子分更高（91），裸标签仅 89，避免"表单文案依赖"压过稳定属性。
+   * 优先使用 name/placeholder/aria-label 等有业务区分度的属性，最后回退到裸标签。
+   * type="text" 在表单中几乎处处相同，不具备消歧价值，因此不再让它压过更短的裸 input；
+   * radio/checkbox/date 等非 text 类型仅作为低分补充，在裸标签不唯一时才可能胜出。
    */
   getFormLeafCandidates() {
     const tagName = this.element.tagName.toLowerCase();
     const leaves = [];
     if (tagName === 'input' || tagName === 'textarea' || tagName === 'select' || tagName === 'button') {
       let leaf = tagName;
-      for (const attr of ['name', 'type', 'placeholder', 'aria-label']) {
+      const attributeScores = { name: 91, placeholder: 90, 'aria-label': 91 };
+      for (const attr of Object.keys(attributeScores)) {
         const value = normalizeSelectorText(this.element.getAttribute(attr), 60);
         if (value && dynamicValuePenalty(value) < 80) {
           // 注意：此处写入 XPath 的是真实属性值，不是规范化后的 value。
-          leaves.push({ xpath: `${tagName}[@${attr}=${quoteXPathValue(this.element.getAttribute(attr))}]`, score: 91 });
+          leaves.push({ xpath: `${tagName}[@${attr}=${quoteXPathValue(this.element.getAttribute(attr))}]`, score: attributeScores[attr] });
         }
       }
       leaves.push({ xpath: leaf, score: 89 });
+      const type = this.element.getAttribute('type');
+      if (type && type !== 'text' && dynamicValuePenalty(type) < 80) {
+        leaves.push({ xpath: `${tagName}[@type=${quoteXPathValue(type)}]`, score: 88 });
+      }
     } else {
       leaves.push({ xpath: this.getSemanticLeaf(this.element), score: 89 });
     }
