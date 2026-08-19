@@ -184,7 +184,7 @@ function getTextContentLabel(element) {
   let textContentStr = ''
   if (['button', 'a', '[role="button"]'].includes(tagName)) {
     textContentStr = element.textContent.trim();
-  }else if ((tagName === 'div' || tagName === 'p' || tagName === 'span') && element.children.length == 0) {
+  }else if (['div', 'p', 'span', 'li'].includes(tagName) && element.children.length == 0) {
     textContentStr = element.textContent.trim();
     console.log('--div-p-span--:', textContentStr);
   }else {
