@@ -33,6 +33,10 @@ const PageElementScannerController = (function () {
     routeCheckMs: 300,
     routeQuietMs: 600,
     routeMaxWaitMs: 5000,
+    // 滚动/视口变化后的响应式 DOM 更新不属于用户主动打开的新区域
+    passiveLayoutQuietMs: 3000,
+    // 页签、折叠面板、按钮等主动操作后的异步渲染仍允许触发扫描
+    uiActivationMaxAgeMs: 3000,
     // MutationObserver 配置
     observerOptions: {
       childList: true,
@@ -65,6 +69,12 @@ const PageElementScannerController = (function () {
   // 弹窗等区域已出现、但尚处于 debounce 等待的扫描上下文。
   // 录制器在此期间操作新区域内元素时，可使用该上下文与随后扫描结果保持同一锚点。
   let pendingScanAnchor = null
+  let lastScrollTime = 0
+  let lastResizeTime = 0
+  let lastUiActivationTime = 0
+  let lastViewportWidth = window.innerWidth
+  let lastViewportHeight = window.innerHeight
+  let significantRootState = new WeakMap()
 
   // 用 "页面 + 元素 target + 锚点 target" 作为 key 保存扫描快照。
   // 同一弹窗组件被 A/B 按钮复用时，允许同一 DOM/XPath 在不同锚点下同时保留。
@@ -170,6 +180,44 @@ const PageElementScannerController = (function () {
     const style = window.getComputedStyle(element)
     if (style.display === 'none' || style.visibility === 'hidden') return false
     return true
+  }
+
+  function markScrollActivity() {
+    lastScrollTime = Date.now()
+    cancelPassivePendingScan()
+  }
+
+  function markResizeActivity() {
+    lastResizeTime = Date.now()
+    lastViewportWidth = window.innerWidth
+    lastViewportHeight = window.innerHeight
+    cancelPassivePendingScan()
+  }
+
+  function detectViewportResize() {
+    if (window.innerWidth === lastViewportWidth && window.innerHeight === lastViewportHeight) return
+    markResizeActivity()
+  }
+
+  function hasRecentUiActivation() {
+    return Date.now() - lastUiActivationTime <= config.uiActivationMaxAgeMs
+  }
+
+  function cancelPassivePendingScan() {
+    if (hasRecentUiActivation()) return
+    clearTimeout(debounceTimer)
+    debounceTimer = null
+    clearTimeout(deferredRegionScanTimer)
+    deferredRegionScanTimer = null
+    pendingRoots = []
+    pendingScanAnchor = null
+    lastTrigger = null
+  }
+
+  function isPassiveLayoutChange() {
+    const passiveTime = Math.max(lastScrollTime, lastResizeTime)
+    return passiveTime > lastUiActivationTime &&
+      Date.now() - passiveTime <= config.passiveLayoutQuietMs
   }
 
   /**
@@ -679,6 +727,12 @@ const PageElementScannerController = (function () {
       return
     }
 
+    const visibleRoots = roots.filter(isVisibleElement)
+    if (visibleRoots.length === 0) {
+      pendingScanAnchor = null
+      return
+    }
+
     notifyScanStatus('scanning', getScannedElementCount())
     const overlayVersion = await beginScanOverlay()
     if (overlayVersion === null) return
@@ -698,8 +752,7 @@ const PageElementScannerController = (function () {
       const allResults = []
       const actualRoots = []
 
-      for (const root of roots) {
-        if (!isVisibleElement(root)) continue
+      for (const root of visibleRoots) {
         const results = scanRoot(root)
 
         if (results.length > 0) {
@@ -774,6 +827,19 @@ const PageElementScannerController = (function () {
     const nextPage = getPageContext()
     if (nextPage.routeIdentity === currentRouteIdentity) return
 
+    // 滚动定位或 DevTools/窗口尺寸变化引起的响应式路由更新不触发扫描。
+    if (isPassiveLayoutChange()) {
+      clearTimeout(debounceTimer)
+      debounceTimer = null
+      pendingRoots = []
+      pendingScanAnchor = null
+      lastTrigger = null
+      routeScanPending = false
+      clearRouteScanTimers()
+      activatePageContext()
+      return
+    }
+
     clearTimeout(debounceTimer)
     debounceTimer = null
     pendingRoots = []
@@ -813,19 +879,27 @@ const PageElementScannerController = (function () {
    */
   function findAffectedRoots(mutations) {
     const roots = new Set()
+    const suppressPassiveChange = isPassiveLayoutChange()
+    const allowActiveAncestor = hasRecentUiActivation()
     for (const m of mutations) {
       if (m.type === 'childList') {
         m.addedNodes.forEach(node => {
           if (node.nodeType !== Node.ELEMENT_NODE) return
-          const root = findSignificantRoot(node, true)
-          if (root) {
-            roots.add(root)
+          const candidates = findSignificantRoots(node, allowActiveAncestor)
+          for (const root of candidates) {
+            const newlyVisible = updateSignificantRootState(root)
+            if (!suppressPassiveChange && (newlyVisible || (allowActiveAncestor && root.contains(node)))) {
+              roots.add(root)
+            }
           }
         })
       } else if (m.type === 'attributes') {
         const target = m.target
-        if (target && target.nodeType === Node.ELEMENT_NODE && isSignificantUiChange(target, false)) {
-          roots.add(target)
+        if (!target || target.nodeType !== Node.ELEMENT_NODE) continue
+        const candidates = findSignificantRoots(target, false)
+        for (const root of candidates) {
+          const newlyVisible = updateSignificantRootState(root)
+          if (!suppressPassiveChange && newlyVisible) roots.add(root)
         }
       }
     }
@@ -869,37 +943,43 @@ const PageElementScannerController = (function () {
       '[role="tabpanel"]'
   ]
 
-  function isSignificantUiChange(element, includeAncestor = true) {
-    if (!element || typeof element.matches !== 'function') return false
-
+  /** 返回节点自身、内部以及主动操作时所属的显著扫描容器。 */
+  function findSignificantRoots(element, includeAncestor) {
+    const roots = new Set()
+    if (!element || typeof element.matches !== 'function') return roots
     for (const selector of significantSelectors) {
       try {
-        if (element.matches(selector)) return true
-        if (includeAncestor && element.closest(selector)) return true
-      } catch (e) {
-        // 无效选择器跳过
-      }
-    }
-    return false
-  }
-
-  /** 新增节点可能包含或位于显著容器中，返回最适合扫描的容器根节点。 */
-  function findSignificantRoot(element, includeAncestor) {
-    if (!element || typeof element.matches !== 'function') return null
-    for (const selector of significantSelectors) {
-      try {
-        if (element.matches(selector)) return element
-        const descendant = element.querySelector?.(selector)
-        if (descendant) return descendant
+        if (element.matches(selector)) roots.add(element)
+        element.querySelectorAll?.(selector).forEach(root => roots.add(root))
         if (includeAncestor) {
           const ancestor = element.closest(selector)
-          if (ancestor) return ancestor
+          if (ancestor) roots.add(ancestor)
         }
       } catch (e) {
         // 无效选择器跳过
       }
     }
-    return null
+    return roots
+  }
+
+  function updateSignificantRootState(root) {
+    const wasKnown = significantRootState.has(root)
+    const wasVisible = significantRootState.get(root) === true
+    const isVisible = isVisibleElement(root)
+    significantRootState.set(root, isVisible)
+    return isVisible && (!wasKnown || !wasVisible)
+  }
+
+  function rememberSignificantRootStates() {
+    for (const selector of significantSelectors) {
+      try {
+        document.querySelectorAll(selector).forEach(root => {
+          significantRootState.set(root, isVisibleElement(root))
+        })
+      } catch (e) {
+        // 无效选择器跳过
+      }
+    }
   }
 
   /**
@@ -936,6 +1016,7 @@ const PageElementScannerController = (function () {
   function onMutations(mutations) {
     if (!popupOpen || document.hidden) return
 
+    detectViewportResize()
     handleRouteChanged()
 
     // 路由已变化时，所有 DOM 更新都用于判断新页面何时稳定，不参与旧的锚点增量扫描。
@@ -997,6 +1078,12 @@ const PageElementScannerController = (function () {
   function onClick(event) {
     if (!popupOpen) return
     const target = event.target
+    const uiControl = target.closest?.(
+      'button, a[href], [role="button"], [role="link"], [role="tab"], ' +
+      '.el-tabs__item, .ant-tabs-tab, .ivu-tabs-tab, .tab-item, ' +
+      '.el-collapse-item__header, .ant-collapse-header, .ivu-collapse-header, .collapse-header'
+    )
+    if (uiControl) lastUiActivationTime = Date.now()
     let triggerEl = null
     if (typeof PageElementScanner !== 'undefined' && typeof PageElementScanner.resolveButtonRoot === 'function') {
       triggerEl = PageElementScanner.resolveButtonRoot(target)
@@ -1011,6 +1098,7 @@ const PageElementScannerController = (function () {
   function startObserver() {
     if (document.hidden) return
     if (!observer) {
+      rememberSignificantRootStates()
       const target = document.body || document.documentElement
       observer = new MutationObserver(onMutations)
       observer.observe(target, config.observerOptions)
@@ -1061,6 +1149,7 @@ const PageElementScannerController = (function () {
     nextPageOrder = 0
     currentPageContext = null
     currentRouteIdentity = ''
+    significantRootState = new WeakMap()
     if (typeof Recorder !== 'undefined') {
       Recorder.scannedPageElements = []
     }
@@ -1134,6 +1223,9 @@ const PageElementScannerController = (function () {
   function init() {
     initMessageListener()
     document.addEventListener('visibilitychange', onVisibilityChanged)
+    document.addEventListener('scroll', markScrollActivity, true)
+    window.addEventListener('resize', markResizeActivity)
+    window.visualViewport?.addEventListener('resize', markResizeActivity)
   }
 
   // ==================== 暴露接口 ====================
