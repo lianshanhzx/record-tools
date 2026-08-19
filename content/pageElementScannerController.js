@@ -49,6 +49,7 @@ const PageElementScannerController = (function () {
   let scanOverlayKeydownListener = null
   let observer = null
   let debounceTimer = null
+  let deferredRegionScanTimer = null
   let lastScanTime = 0
   let routeCheckTimer = null
   let routeScanTimer = null
@@ -138,6 +139,9 @@ const PageElementScannerController = (function () {
   async function beginScanOverlay() {
     const version = scanLifecycleVersion
     scanOverlayCount++
+    if (document.hidden) {
+      return popupOpen && version === scanLifecycleVersion ? version : null
+    }
     showScanOverlay()
     await new Promise(resolve => requestAnimationFrame(() => setTimeout(resolve, 0)))
     return popupOpen && version === scanLifecycleVersion ? version : null
@@ -436,21 +440,6 @@ const PageElementScannerController = (function () {
       entry[1].scanIndex = index
     })
 
-    const anchoredTotal = entries.filter(e => e[1]._anchorTarget).length
-    if (anchoredTotal > 0) {
-      const firstAnchored = entries.find(e => e[1]._anchorTarget)
-      let anchorName = ''
-      if (firstAnchored) {
-        for (const [targetEl, info] of scannedElementMap) {
-          if (info.pageKey === firstAnchored[1].pageKey && info.target === firstAnchored[1]._anchorTarget) {
-            anchorName = info.propertiesName || ''
-            break
-          }
-        }
-      }
-      console.log(`[ScannerController] 排序完成，共 ${anchoredTotal} 个带锚点元素；首个锚点: ${firstAnchored ? firstAnchored[1]._anchorTarget : 'none'} (${anchorName})`)
-    }
-
     if (typeof Recorder !== 'undefined') {
       Recorder.scannedPageElements = entries.map(([_, info]) => cloneInfo(info))
     }
@@ -531,7 +520,7 @@ const PageElementScannerController = (function () {
    */
   function notifyPopup(replacePageKey) {
     updatePublicArray()
-    const elements = typeof Recorder !== 'undefined' ? Recorder.scannedPageElements.map(cloneInfo) : []
+    const elements = typeof Recorder !== 'undefined' ? Recorder.scannedPageElements : []
     chrome.runtime.sendMessage({
       type: 'addScannedElements',
       data: elements,
@@ -562,17 +551,15 @@ const PageElementScannerController = (function () {
   /**
    * 扫描指定根节点，并保留内部引用以便增量合并。
    * @param {Document|Element} root 扫描根节点
-   * @param {string} reason 扫描触发原因，用于日志
    * @returns {Array} 扫描结果数组
    */
-  function scanRoot(root, reason) {
+  function scanRoot(root) {
     try {
       if (typeof PageElementScanner === 'undefined') {
         console.warn('[ScannerController] PageElementScanner 未加载')
         return []
       }
       const results = PageElementScanner.scan(root, { keepRefs: true })
-      console.log(`[ScannerController] ${reason} 扫描区域 ${root?.nodeName || 'document'}，共 ${results.length} 个元素`)
       return results
     } catch (e) {
       console.error('[ScannerController] 扫描失败', e)
@@ -582,10 +569,9 @@ const PageElementScannerController = (function () {
 
   /**
    * 全量扫描整个页面。
-   * @param {string} reason 扫描触发原因，用于日志
    * @param {boolean} force 是否忽略最小扫描间隔强制扫描
    */
-  async function fullScan(reason, force = false) {
+  async function fullScan(force = false) {
     const now = Date.now()
     if (!popupOpen ||
         (fullScanToken && fullScanToken.version === scanLifecycleVersion) ||
@@ -610,7 +596,7 @@ const PageElementScannerController = (function () {
       }
       activeAnchorByElement = new WeakMap()
       lastTrigger = null
-      const results = scanRoot(document, reason)
+      const results = scanRoot(document)
       results.forEach(info => {
         info.pageKey = page.key
         info.pageUrl = page.url
@@ -636,7 +622,7 @@ const PageElementScannerController = (function () {
    * 已扫描过的元素不会因后续隐藏/移除而被删除，确保元素列表尽量全面。
    * 合并时保留旧记录中已有的锚点关系（第一次为准）。
    */
-  function mergeRegionResults(regionResults, roots) {
+  function mergeRegionResults(regionResults) {
     regionResults.forEach(info => {
       const page = currentPageContext || activatePageContext()
       info.pageKey = page.key
@@ -671,17 +657,20 @@ const PageElementScannerController = (function () {
   /**
    * 扫描一个或多个变化区域，并增量合并。
    * @param {Element[]} roots 变化区域根节点数组
-   * @param {string} reason 扫描触发原因
    * @param {Element|null} [anchorElement] 触发本次变化的按钮类元素（可选）
    */
-  async function scanRegions(roots, reason, anchorElement = null) {
-    if (!popupOpen) return
+  async function scanRegions(roots, anchorElement = null) {
+    if (!popupOpen || document.hidden) return
     const now = Date.now()
     if (now - lastScanTime < config.minIntervalMs) {
       const remaining = config.minIntervalMs - (now - lastScanTime)
       const scheduledVersion = scanLifecycleVersion
-      setTimeout(() => {
-        if (popupOpen && scheduledVersion === scanLifecycleVersion) scanRegions(roots, reason, anchorElement)
+      clearTimeout(deferredRegionScanTimer)
+      deferredRegionScanTimer = setTimeout(() => {
+        deferredRegionScanTimer = null
+        if (popupOpen && !document.hidden && scheduledVersion === scanLifecycleVersion) {
+          scanRegions(roots, anchorElement)
+        }
       }, remaining)
       return
     }
@@ -711,7 +700,7 @@ const PageElementScannerController = (function () {
 
       for (const root of roots) {
         if (!isVisibleElement(root)) continue
-        const results = scanRoot(root, reason)
+        const results = scanRoot(root)
 
         if (results.length > 0) {
           allResults.push(...results)
@@ -722,9 +711,8 @@ const PageElementScannerController = (function () {
           const parent = root.parentElement
           // 避免同一个父节点被多次扫描
           if (!actualRoots.includes(parent)) {
-            const parentResults = scanRoot(parent, reason)
+            const parentResults = scanRoot(parent)
             if (parentResults.length > 0) {
-              console.log(`[ScannerController] ${reason} 根节点 ${root.nodeName} 无元素，向上扫描父节点 ${parent.nodeName}，共 ${parentResults.length} 个元素`)
               allResults.push(...parentResults)
               actualRoots.push(parent)
             }
@@ -739,22 +727,19 @@ const PageElementScannerController = (function () {
       }
 
       // 为本次新扫描到的元素标记锚点（首次为准，已存在锚点的元素不会被覆盖）
-      let anchoredCount = 0
       if (anchorTarget) {
         allResults.forEach(info => {
           if (info.target === anchorTarget) return
           if (!info._anchorTarget) {
             info._anchorTarget = anchorTarget
             info._anchorPropertiesName = anchorPropertiesName || ''
-            anchoredCount++
           }
         })
-        console.log(`[ScannerController] 本次增量扫描使用锚点: ${anchorTarget} (${anchorPropertiesName})，锚定 ${anchoredCount}/${allResults.length} 个元素`)
       } else if (anchorElement) {
         console.warn('[ScannerController] 存在触发按钮但未能解析为有效锚点:', anchorElement)
       }
 
-      const count = mergeRegionResults(allResults, actualRoots)
+      const count = mergeRegionResults(allResults)
       notifyScanStatus('completed', count)
       pendingScanAnchor = null
       lastScanTime = Date.now()
@@ -776,7 +761,7 @@ const PageElementScannerController = (function () {
     if (!popupOpen || !routeScanPending) return
     routeScanPending = false
     clearRouteScanTimers()
-    fullScan('routeChanged', true)
+    fullScan(true)
   }
 
   function scheduleRouteScan() {
@@ -799,7 +784,6 @@ const PageElementScannerController = (function () {
     clearRouteScanTimers()
     scheduleRouteScan()
     routeMaxWaitTimer = setTimeout(executeRouteScan, config.routeMaxWaitMs)
-    console.log('[ScannerController] 检测到路由变化，等待新页面渲染:', currentRouteIdentity)
   }
 
   function startRouteObserver() {
@@ -832,13 +816,15 @@ const PageElementScannerController = (function () {
     for (const m of mutations) {
       if (m.type === 'childList') {
         m.addedNodes.forEach(node => {
-          if (node.nodeType === Node.ELEMENT_NODE && isSignificantUiChange(node)) {
-            roots.add(node)
+          if (node.nodeType !== Node.ELEMENT_NODE) return
+          const root = findSignificantRoot(node, true)
+          if (root) {
+            roots.add(root)
           }
         })
       } else if (m.type === 'attributes') {
         const target = m.target
-        if (target && target.nodeType === Node.ELEMENT_NODE && isSignificantUiChange(target)) {
+        if (target && target.nodeType === Node.ELEMENT_NODE && isSignificantUiChange(target, false)) {
           roots.add(target)
         }
       }
@@ -856,10 +842,7 @@ const PageElementScannerController = (function () {
    * 判断元素是否属于需要触发扫描的显著 UI 容器。
    * 仅包含：页面弹窗/抽屉、折叠面板、Tab 页签相关元素。
    */
-  function isSignificantUiChange(element) {
-    if (!element || typeof element.closest !== 'function') return false
-
-    const significantSelectors = [
+  const significantSelectors = [
       // 1. 页面弹窗 / 抽屉 / 模态框
       '.el-dialog', '.el-dialog__wrapper',
       '.el-drawer', '.el-drawer__wrapper',
@@ -884,16 +867,39 @@ const PageElementScannerController = (function () {
       '.ivu-tabs', '.ivu-tabs-tabpane', '.ivu-tabs-tab',
       '.tabs', '.tab-pane', '.tab-content', '.tab-item',
       '[role="tabpanel"]'
-    ]
+  ]
+
+  function isSignificantUiChange(element, includeAncestor = true) {
+    if (!element || typeof element.matches !== 'function') return false
 
     for (const selector of significantSelectors) {
       try {
-        if (element.closest(selector) || element.matches(selector)) return true
+        if (element.matches(selector)) return true
+        if (includeAncestor && element.closest(selector)) return true
       } catch (e) {
         // 无效选择器跳过
       }
     }
     return false
+  }
+
+  /** 新增节点可能包含或位于显著容器中，返回最适合扫描的容器根节点。 */
+  function findSignificantRoot(element, includeAncestor) {
+    if (!element || typeof element.matches !== 'function') return null
+    for (const selector of significantSelectors) {
+      try {
+        if (element.matches(selector)) return element
+        const descendant = element.querySelector?.(selector)
+        if (descendant) return descendant
+        if (includeAncestor) {
+          const ancestor = element.closest(selector)
+          if (ancestor) return ancestor
+        }
+      } catch (e) {
+        // 无效选择器跳过
+      }
+    }
+    return null
   }
 
   /**
@@ -928,7 +934,7 @@ const PageElementScannerController = (function () {
    * 仅在 popup 打开期间处理，且只会在变化后 debounce 扫描一次。
    */
   function onMutations(mutations) {
-    if (!popupOpen) return
+    if (!popupOpen || document.hidden) return
 
     handleRouteChanged()
 
@@ -949,9 +955,8 @@ const PageElementScannerController = (function () {
       const age = Date.now() - lastTrigger.time
       if (age <= config.triggerMaxAgeMs) {
         lastTrigger.active = true
-        console.log('[ScannerController] 触发源已激活，变化距点击', age, 'ms')
       } else {
-        console.log('[ScannerController] 触发源未激活，变化距点击', age, 'ms，超过', config.triggerMaxAgeMs, 'ms')
+        lastTrigger.active = false
       }
     }
 
@@ -966,13 +971,9 @@ const PageElementScannerController = (function () {
       pendingRoots = []
       let trigger = getRecentTrigger()
       if (trigger && !isAnchorDialogVisible(trigger)) {
-        console.log('[ScannerController] 触发按钮所属弹窗已关闭，不使用该按钮作为扫描锚点')
         trigger = null
       }
-      if (trigger) {
-        console.log('[ScannerController] 准备增量扫描，触发源:', trigger.nodeName, (trigger.textContent || '').trim().slice(0, 20))
-      }
-      scanRegions(uniqueRoots, 'domMutation', trigger)
+      scanRegions(uniqueRoots, trigger)
       lastTrigger = null
     }, config.debounceMs)
   }
@@ -1002,13 +1003,13 @@ const PageElementScannerController = (function () {
     }
     if (triggerEl) {
       lastTrigger = { element: triggerEl, time: Date.now(), active: false }
-      console.log('[ScannerController] 捕获按钮点击，待关联触发源:', triggerEl.nodeName, triggerEl.textContent?.trim().slice(0, 20))
     }
   }
 
   // ==================== 生命周期管理 ====================
 
   function startObserver() {
+    if (document.hidden) return
     if (!observer) {
       const target = document.body || document.documentElement
       observer = new MutationObserver(onMutations)
@@ -1017,7 +1018,6 @@ const PageElementScannerController = (function () {
       document.addEventListener('click', clickListener, true)
     }
     startRouteObserver()
-    console.log('[ScannerController] DOM 观察已启动')
   }
 
   function stopObserver() {
@@ -1031,11 +1031,25 @@ const PageElementScannerController = (function () {
     }
     clearTimeout(debounceTimer)
     debounceTimer = null
+    clearTimeout(deferredRegionScanTimer)
+    deferredRegionScanTimer = null
     stopRouteObserver()
     pendingRoots = []
     pendingScanAnchor = null
     lastTrigger = null
-    console.log('[ScannerController] DOM 观察已停止')
+  }
+
+  function onVisibilityChanged() {
+    if (!popupOpen) return
+    if (document.hidden) {
+      stopObserver()
+      forceRemoveScanOverlay()
+      return
+    }
+
+    // 后台期间的 DOM 变化不补做增量扫描；仅在路由确实变化时走正常路由扫描。
+    startObserver()
+    handleRouteChanged()
   }
 
   function clearData() {
@@ -1057,7 +1071,7 @@ const PageElementScannerController = (function () {
   async function onPopupOpened() {
     popupOpen = true
     startObserver()
-    await fullScan('popupOpened')
+    await fullScan()
     const count = (typeof Recorder !== 'undefined' && Recorder.scannedPageElements)
       ? Recorder.scannedPageElements.length
       : 0
@@ -1108,7 +1122,7 @@ const PageElementScannerController = (function () {
         debounceTimer = null
         pendingRoots = []
         clearData()
-        fullScan('reRecord', true)
+        fullScan(true)
           .then(count => sendResponse({ status: 'clearedAndRescanned', count: count }))
           .catch(error => sendResponse({ status: 'clearedAndRescanned', error: error.message }))
         return true
@@ -1119,6 +1133,7 @@ const PageElementScannerController = (function () {
 
   function init() {
     initMessageListener()
+    document.addEventListener('visibilitychange', onVisibilityChanged)
   }
 
   // ==================== 暴露接口 ====================

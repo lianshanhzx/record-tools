@@ -8,11 +8,14 @@
  * @returns {string}
  */
 function uuid() {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID()
+  }
   const hex = '0123456789abcdef'
   const s = []
   for (let i = 0; i < 36; i++) s[i] = hex.substr(Math.floor(Math.random() * 16), 1)
   s[14] = '4'
-  s[19] = hex.substr((s[19] & 0x3) | 0x8, 1)
+  s[19] = hex.substr((parseInt(s[19], 16) & 0x3) | 0x8, 1)
   s[8] = s[13] = s[18] = s[23] = '-'
   return s.join('')
 }
@@ -36,7 +39,7 @@ function actionTree2Json(groups, url) {
  * @returns {Blob|null}
  */
 function txt2Blob(content) {
-  return content ? new Blob([content], { type: 'application/json' }) : null
+  return new Blob([content == null ? '' : content], { type: 'application/json' })
 }
 
 /**
@@ -46,7 +49,9 @@ function txt2Blob(content) {
  */
 function saveAsBlobFile(blob, name) {
   const url = window.URL.createObjectURL(blob)
-  chrome.downloads.download({ url, saveAs: true, filename: name })
+  chrome.downloads.download({ url, saveAs: true, filename: name }, () => {
+    window.URL.revokeObjectURL(url)
+  })
 }
 
 // 支持 CommonJS 和浏览器全局变量两种导出方式

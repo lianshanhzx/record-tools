@@ -87,10 +87,17 @@ const UploadService = {
     const empty = RecordManager.recordInfoLit.filter(item => !item.propertiesName)
     if (empty.length > 0) { alert('请补充业务对象名称！'); return }
     chrome.storage.sync.get('tyAtpData', async (res) => {
-      const zdhData = JSON.parse(res.tyAtpData)
-      const result = await self.uploadTexResult(zdhData)
-      if (result.code === '200') alert(result.msg)
-      else alert(result.msg)
+      try {
+        if (!res.tyAtpData) throw new Error('未找到自动化平台连接配置')
+        const zdhData = JSON.parse(res.tyAtpData)
+        if (!zdhData.hostOrigin || !zdhData.transcationId || !zdhData.zdh_token) {
+          throw new Error('自动化平台连接配置不完整')
+        }
+        const result = await self.uploadTexResult(zdhData)
+        alert(result?.msg || '提交完成')
+      } catch (error) {
+        alert('提交失败：' + (error?.message || String(error)))
+      }
     })
   }
 }

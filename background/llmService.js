@@ -14,8 +14,6 @@ const LLMService = {
 2. fill_date_field — 填写日期类型，参数 { "action": "fill_date_field", "label": "字段标签", "value": "要填的值" }
 3. click_element_by_index — 点击元素旁边的按钮（仅用于用户未提供值、需要通过弹窗/选择器选择的情况），参数 { "action": "click_element_by_index", "label": "字段标签" }
 4. select_option — 选中下拉框，参数 { "action": "select_option", "label": "字段标签", "option": "要选的选项" }
-5. select_tree_option — 选中树选择类型，参数 { "action": "select_tree_option", "label": "字段标签", "option": "要选的选项" }
-
 【核心规则 — 必须严格遵守】
 1. 对每个字段都必须返回一个动作，动作数量必须等于字段数量（除非 options 为空或已有值或 disabled，见下方规则）
 2. 如果字段已经有值（currentValue 非空），则跳过该字段（不生成动作）
@@ -80,9 +78,6 @@ const LLMService = {
    */
   async callLLM(config, fields, instruction) {
     const prompt = this.buildUserPrompt(fields, instruction)
-    console.log('[自动填表] 发送给LLM的字段:', JSON.stringify(fields, null, 2))
-    console.log('[自动填表] 用户指令:', instruction)
-    console.log('[自动填表] LLM Prompt:\n' + prompt)
     const response = await fetch(`${config.baseUrl}/chat/completions`, {
       method: 'POST',
       headers: {
@@ -106,11 +101,11 @@ const LLMService = {
       throw new Error(`LLM API error ${response.status}: ${err}`)
     }
     const data = await response.json()
-    const content = data.choices[0].message.content
-    console.log('[自动填表] LLM 原始响应:', content)
+    const content = data.choices?.[0]?.message?.content
+    if (typeof content !== 'string') throw new Error('LLM 返回格式不正确')
     let parsed = JSON.parse(content)
     if (parsed.actions) parsed = parsed.actions
-    console.log('[自动填表] 解析后的动作:', JSON.stringify(parsed, null, 2))
+    if (!Array.isArray(parsed)) throw new Error('LLM 未返回动作数组')
     return { actions: parsed, rawPrompt: prompt, rawResponse: content }
   }
 }

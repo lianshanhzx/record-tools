@@ -13,9 +13,6 @@
 const ACTION_TYPE_ATTRIBUTE = 'ATTRIBUTE'
 
 const Recorder = {
-  nameMap: {},
-  currId: '',
-  listenDomList: [],
   scannedPageElements: [],
   idMap: new Map(),
   actions: [],
@@ -23,119 +20,21 @@ const Recorder = {
   _dateTimers: [],
 
   /**
-   * 获取已录制的动作列表
-   * 调用位置：content.js → pauseRecordEvent / stopRecordEvent
-   */
-  getActions() {
-    console.log('----getActions-----', this.actions)
-    return this.actions
-  },
-
-  /**
-   * 绑定在 label 父容器上的点击事件处理，把 label 文本作为当前动作的业务名称保存。
-   * 调用位置：recorder.js → getLableValue 中绑定
-   */
-  listenerHandle(event) {
-    const labelDom = event && event.currentTarget && event.currentTarget.querySelector?.('label')
-    const labelName = labelDom?.innerText || ''
-    if (Recorder.currId) {
-      Recorder.nameMap[Recorder.currId] = labelName
-    }
-  },
-
-  /**
-   * 清理录制状态：清空名称映射、动作列表、解绑 label 监听等。
+   * 清理录制状态：清空动作列表、定时器和树选择候选状态。
    * 调用位置：content.js → pauseRecordEvent / stopRecordEvent
    */
   destroy() {
-    console.log('----destroy-----')
     try {
-      this.nameMap = {}
-      this.currId = ''
       if (TreeSelectHandler) {
         TreeSelectHandler.pendingTreeSelect = null
         TreeSelectHandler.lastTreeSelect = null
-      }
-      if (this.listenDomList.length > 0) {
-        this.listenDomList.forEach(item => {
-          item.removeAttribute('isonclick')
-          item.removeAttribute('isonclicked')
-          item.removeEventListener('click', this.listenerHandle)
-        })
-        this.listenDomList = []
       }
       this._dateTimers.forEach(clearTimeout)
       this._dateTimers = []
       this.actions = []
       this.idMap.clear()
     } catch (error) {
-      console.log(error)
-    }
-  },
-
-  /**
-   * 递归向上查找最近的 FORM 元素。
-   * 调用位置：recorder.js → getLableValue
-   */
-  getFormDom(element) {
-    if (element.nodeName === 'FORM') {
-      return element
-    } else if (element.parentNode && element.parentNode.nodeName) {
-      const formDom = this.getFormDom(element.parentNode)
-      return formDom || null
-    }
-  },
-
-  /**
-   * 为表单内所有 label 的父容器标记 isonclick 属性。
-   * 调用位置：recorder.js → getLableValue
-   */
-  setOnClickFlag(form) {
-    const allLabels = form.getElementsByTagName?.('label')
-    if (allLabels && allLabels.length > 0) {
-      for (let index = 0; index < allLabels.length; index++) {
-        const element = allLabels[index];
-        if (element.parentElement && !element.parentElement.getAttribute?.('isonclick')) {
-          element.parentElement.setAttribute('isonclick', true)
-        }
-      }
-    }
-  },
-
-  /**
-   * 尝试为当前动作找到对应的业务名称（label / 表单 label / 中文名称）。
-   * 调用位置：recorder.js → setAction
-   */
-  getLableValue(element) {
-    if (this.nameMap[this.currId]) {
-      return
-    }
-    if (element.id !== '') {
-      const labelDom = document.querySelector('label[for="' + element.id + '"]')
-      if (labelDom && labelDom.innerText) {
-        this.nameMap[this.currId] = labelDom.innerText
-      }
-    } else if (element.form) {
-      this.setOnClickFlag(element.form)
-    } else {
-      if (this.getFormDom(element.parentNode)) {
-        this.setOnClickFlag(this.getFormDom(element.parentNode))
-      }
-    }
-
-    const needList = document.querySelectorAll('div[isonclick="true"]')
-    for (let index = 0; index < needList.length; index++) {
-      const needNode = needList[index];
-      if (needNode.onclick) {
-        return
-      }
-      if (!needNode.getAttribute('isonclicked')) {
-        needNode.setAttribute('isonclicked', true)
-        this.listenDomList.push(needNode)
-        needNode.addEventListener('click', this.listenerHandle, {
-          capture: true
-        })
-      }
+      console.error(error)
     }
   },
 
@@ -158,8 +57,6 @@ const Recorder = {
 
     let xp = new SmartSelector(element).getSelector();
     let actionType = '';
-
-    console.log('----element--1111---', element, element.type, element['command'])
 
     if (element['command'] === 'fill_date_field') {
       actionType = 'fill_date_field';
@@ -316,8 +213,6 @@ const Recorder = {
    * 调用位置：recorder.js → setAttributeAction / content/eventMonitor.js
    */
   setAction(element, otherParam = {}) {
-    console.log('---setAction---', element, otherParam);
-
     const id = this.idMap.get(element);
     const action = Object.assign(
       this.parseElement(element, id),
@@ -364,9 +259,6 @@ const Recorder = {
     action.manualRecord = true
     action.recorded = true
 
-    this.currId = action.id
-    this.getLableValue(element)
-
     const lastAction = this.actions[this.actions.length - 1];
     if (this.actions.length > 0 && lastAction.command == 'select' && element.command == 'selectOption') {
       let lastEle = null
@@ -378,9 +270,9 @@ const Recorder = {
       setTimeout(() => {
         if (lastEle && lastEle.value) {
           lastAction.value = lastEle.value
-        } else {
+        } else if (lastEle) {
           const selectEle = lastEle.closest(".el-select")
-          const multiEles = selectEle.querySelectorAll(".el-select__tags-text")
+          const multiEles = selectEle ? selectEle.querySelectorAll(".el-select__tags-text") : []
 
           let selectValueArr = []
           if (multiEles && multiEles.length > 0) {

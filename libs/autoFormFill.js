@@ -134,9 +134,6 @@ const AutoFormFill = {
    * 调用位置：autoFormFill.js → fillFormField / executeActions
    */
   async fillDateField(target, val) {
-    const log = (msg) => console.log('[AutoFill]', msg)
-    log('fillDateField 开始, value: ' + val)
-
     const dateEditor = target.closest('.el-date-editor, .tsscdatepicker')
     if (!dateEditor) {
       this.setNativeValue(target, val)
@@ -152,7 +149,6 @@ const AutoFormFill = {
 
     const formItem = target.closest('.el-form-item')
     const prop = formItem?.getAttribute('prop') || ''
-    log('el-form-item prop: ' + prop)
 
     const formEl = target.closest('.el-form')
     let updated = false
@@ -167,7 +163,6 @@ const AutoFormFill = {
             try { formVm.validateField(prop) } catch (e) {}
           }
           updated = true
-          log('Vue2 el-form model 已更新')
         }
         if (!updated && formVm.$data) {
           for (const key of Object.keys(formVm.$data)) {
@@ -178,19 +173,14 @@ const AutoFormFill = {
                 try { formVm.validateField(prop) } catch (e) {}
               }
               updated = true
-              log('Vue2 formVm.$data.' + key + '.' + prop + ' 已更新')
               break
             }
           }
         }
-      } catch (e) {
-        log('Vue2 form 更新异常: ' + e.message)
-      }
+      } catch (e) {}
     }
 
     if (!updated) {
-      log('尝试通过 UI 交互设置日期...')
-
       const findVisiblePanel = () => {
         const panels = document.querySelectorAll('.el-picker-panel, .el-date-picker, .el-popper')
         for (const panel of panels) {
@@ -224,7 +214,6 @@ const AutoFormFill = {
             await new Promise(resolve => setTimeout(resolve, 300))
             const panel = findVisiblePanel()
             if (panel) {
-              log('选择器面板已打开 (attempt=' + attempt + ', wait=' + wait + ')')
               return panel
             }
           }
@@ -241,7 +230,6 @@ const AutoFormFill = {
             const targetYear = parseInt(dateParts[0])
             const targetMonth = parseInt(dateParts[1])
             const targetDay = parseInt(dateParts[2])
-            log('目标日期: ' + targetYear + '-' + targetMonth + '-' + targetDay)
 
             const header = pickerPanel.querySelector('.el-date-picker__header')
             if (header) {
@@ -258,7 +246,6 @@ const AutoFormFill = {
               if (yearLabel && monthLabel) {
                 let currentYear = parseInt(yearLabel.textContent)
                 let currentMonth = parseInt(monthLabel.textContent)
-                log('当前显示: ' + currentYear + '年 ' + currentMonth + '月')
 
                 let safety = 0
                 while (currentYear > targetYear && prevYearBtn && safety < 50) {
@@ -287,15 +274,12 @@ const AutoFormFill = {
                   safety++
                   await new Promise(resolve => setTimeout(resolve, 30))
                 }
-
-                log('导航到: ' + currentYear + '年 ' + currentMonth + '月')
               }
             }
 
             await new Promise(resolve => setTimeout(resolve, 100))
 
             const dayCells = pickerPanel.querySelectorAll('.el-date-table td')
-            log('找到 ' + dayCells.length + ' 个日期单元格')
 
             for (const cell of dayCells) {
               const cellDay = parseInt(cell.textContent.trim())
@@ -304,7 +288,6 @@ const AutoFormFill = {
               const isDisabled = cell.classList.contains('disabled')
 
               if (cellDay === targetDay && !isPrevMonth && !isNextMonth && !isDisabled) {
-                log('点击日期: ' + targetDay)
                 cell.click()
                 updated = true
                 await new Promise(resolve => setTimeout(resolve, 200))
@@ -312,33 +295,19 @@ const AutoFormFill = {
               }
             }
 
-            if (!updated) {
-              log('未找到匹配的日期单元格')
-            }
           }
-        } else {
-          log('未找到日期选择器面板')
         }
-      } catch (e) {
-        log('UI 交互异常: ' + e.message)
-      }
+      } catch (e) {}
     }
 
     if (!updated) {
-      log('所有策略失败，使用 DOM 直接赋值兜底')
       setTimeout(() => {
         target.dispatchEvent(new Event('blur', { bubbles: true }))
       }, 50)
-      updated = true
+      updated = target.value === String(val)
     }
 
-    document.querySelectorAll('.el-picker-panel,.el-date-picker,.el-time-panel').forEach(x => {
-      x.style.display = 'none'
-      x.classList.add('is-hidden')
-    })
-
-    log('fillDateField 完成, updated: ' + updated)
-    return updated ? 'ok-date' : 'ok-date-dom'
+    return updated ? 'ok-date' : 'date-update-failed'
   },
 
   /**
@@ -348,10 +317,8 @@ const AutoFormFill = {
    * 调用位置：autoFormFill.js → executeActions
    */
   async fillFormField(label, val) {
-    console.log('[AutoFill] fillFormField 开始, label:', label, 'value:', val)
     const c = this.getContainer()
     const items = c.querySelectorAll('.el-form-item')
-    console.log('[AutoFill] 找到 el-form-item 数量:', items.length)
     for (const item of items) {
       const lbl = item.querySelector('.el-form-item__label')?.textContent?.trim() || ''
       if (lbl !== label) continue
@@ -589,7 +556,6 @@ const AutoFormFill = {
     if (t === 'fill_date_field' || t === 'fill_date') return { ...a, action: 'fill_date_field' }
     if (t === 'click_element_by_index' || t === 'click') return { ...a, action: 'click_element_by_index' }
     if (t === 'select_option' || t === 'select' || t === 'option' || t === 'selectoption') return { ...a, action: 'select_option' }
-    if (t === 'select_tree_option') return { ...a, action: 'select_tree_option' }
     return a
   },
 
@@ -650,26 +616,17 @@ const AutoFormFill = {
    */
   async executeActions(actions) {
     const results = []
-    console.log('[AutoFill] 开始执行动作，总数:', actions.length)
-    console.log('[AutoFill] 动作列表:', JSON.stringify(actions, null, 2))
     for (let i = 0; i < actions.length; i++) {
       let action = this.normalizeAction(actions[i])
       const { action: type, label, value, option } = action
       let result = 'unknown-action'
       try {
-        console.log('[AutoFill] 执行动作 #' + (i + 1) + '/' + actions.length, 'type:', type, 'label:', label, 'value:', value || option)
         if (type === 'fill_form_field' || type === 'fill_date_field') {
           result = await this.fillFormField(label, value)
-          console.log('[AutoFill] fillFormField 结果:', result, 'label:', label)
         } else if (type === 'select_option') {
           result = await this.selectOption(label, option || value)
-          console.log('[AutoFill] selectOption 结果:', result, 'label:', label)
-        } else if (type === 'fill_input') {
-          result = await this.fillFormField(label, value)
-          console.log('[AutoFill] fill_input 结果:', result, 'label:', label)
         } else if (type === 'click_element_by_index') {
           result = await this.clickButtonForField(label)
-          console.log('[AutoFill] clickButtonForField 结果:', result, 'label:', label)
         }
       } catch (e) {
         result = 'error: ' + e.message
@@ -681,7 +638,6 @@ const AutoFormFill = {
       chrome.runtime.sendMessage({ type: 'actionProgress', data: entry })
       await new Promise(r => setTimeout(r, 400))
     }
-    console.log('[AutoFill] 全部动作执行完成，结果:', JSON.stringify(results, null, 2))
     return results
   },
 

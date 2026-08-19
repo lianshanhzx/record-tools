@@ -40,7 +40,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   let requestType = message.type;
 
   // 高频广播消息短路返回（目标为 Popup，Background 无需处理）
-  if (SKIP_IN_BG.includes(requestType)) return true
+  if (SKIP_IN_BG.includes(requestType)) return false
 
   // 停止录制 → 清除该标签页的录制标记
   if (requestType == 'stopRecord') {
@@ -73,7 +73,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     })
   }
 
-  return true
+  return requestType === 'initMonitor'
 });
 
 // popup 是独立窗口，无法可靠从最近焦点窗口推断录制网页，必须读取后台保存的来源标签。
@@ -143,10 +143,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 // ==================== 扩展图标点击 ====================
 // 调用 background/popupManager.js → PopupManager.openOpertePopup
 chrome.action.onClicked.addListener(async (tab) => {
-  try {
-    await clearPreviousScreenshots()
-  } catch (e) {
-    console.warn('清理旧截图失败:', e)
+  const existingPopup = await PopupManager.findPopupWindow()
+  if (!existingPopup) {
+    try {
+      await clearPreviousScreenshots()
+    } catch (e) {
+      console.warn('清理旧截图失败:', e)
+    }
   }
   await PopupManager.openOpertePopup(undefined, tab && tab.id)
 });
@@ -155,10 +158,9 @@ chrome.action.onClicked.addListener(async (tab) => {
 chrome.runtime.onMessageExternal.addListener(function (request, sender, sendResponse) {
   const ty_atp_data = JSON.stringify(request);
   chrome.storage.sync.set({ tyAtpData: ty_atp_data })
-  // 外部系统唤起新录制会话前，同样清理上次会话生成的截图。
-  clearPreviousScreenshots()
-    .catch(error => console.warn('清理旧截图失败:', error))
-    .finally(async () => {
+  PopupManager.findPopupWindow()
+    .then(async existingPopup => {
+      if (!existingPopup) await clearPreviousScreenshots()
       let targetTabId = sender.tab && sender.tab.id
       if (!targetTabId) {
         const tabs = await chrome.tabs.query({ active: true, lastFocusedWindow: true })
@@ -166,6 +168,7 @@ chrome.runtime.onMessageExternal.addListener(function (request, sender, sendResp
       }
       return PopupManager.openOpertePopup(undefined, targetTabId)
     })
+    .catch(error => console.warn('外部消息唤起弹窗失败:', error))
 });
 
 // 标签页关闭时清理会话录制标记，避免残留状态影响后续标签页。

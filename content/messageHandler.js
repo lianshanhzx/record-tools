@@ -325,10 +325,17 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             }
           } catch (e) {}
           // 调用 messageHandler.js → sendBackMessage
+          const commandByAction = {
+            fill_form_field: 'input',
+            fill_date_field: 'fill_date_field',
+            select_option: 'select',
+            select_tree_option: 'select_tree_option',
+            click_element_by_index: 'click'
+          }
           chrome.runtime.sendMessage({
             type: 'addActionData',
             data: {
-              command: r.action === 'fill_input' ? 'input' : 'select',
+              command: commandByAction[r.action] || r.action,
               target: xpath || ('label="' + r.label + '"'),
               targetType: xpath ? 'xpath' : 'label',
               tagName: el ? el.tagName.toLowerCase() : 'input',
@@ -348,14 +355,13 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       }
       // 调用 messageHandler.js → sendBackMessage (通知完成)
       chrome.runtime.sendMessage({ type: 'actionComplete', data: results })
+    }).catch(error => {
+      chrome.runtime.sendMessage({
+        type: 'actionComplete',
+        data: [{ result: 'error: ' + (error?.message || String(error)) }]
+      })
     })
     sendResponse({ started: true })
     return true
   }
 })
-
-// 页面加载完成后通知 background，便于其恢复录制状态
-window.onload = () => {
-  // 调用 messageHandler.js → sendBackMessage
-  MessageHandler.sendBackMessage('refresh', {})
-}

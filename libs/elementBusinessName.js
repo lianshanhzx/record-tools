@@ -8,9 +8,9 @@
 // 方法1：查找label[for="id"]
 function getLabelByFor(element) {
   if (!element.id) return null;
-  const label = document.querySelector(`label[for="${element.id}"]`);
+  const label = Array.from(document.querySelectorAll('label[for]'))
+    .find(item => item.getAttribute('for') === element.id);
 
-  console.log('getLabelByFor:', label);
   return label ? label.textContent.trim() : null;
 }
 
@@ -46,7 +46,6 @@ function _getButtonOwnName(element) {
 // 方法2：查找包裹元素的label
 function getWrappingLabel(element) {
   let label = element.closest('label');
-  console.log('getWrappingLabel:', label);
   if(label){
     return label.textContent.trim(); 
   }
@@ -62,7 +61,6 @@ function getWrappingLabel(element) {
     if (formItemLabelText && _isButtonElement(element)) {
       var btnName = _getButtonOwnName(element)
       if (btnName) {
-        console.log('[业务对象] 按钮在 el-form-item 内，组合名称:', formItemLabelText, '+', btnName)
         return formItemLabelText + ' ' + btnName
       }
     }
@@ -92,9 +90,9 @@ function getAriaLabel(element) {
     
     const chineseText = labelElements
       .map(el => el.textContent.trim())
-      // .find(text => /[\u4e00-\u9fa5]/.test(text));
+      .filter(Boolean)
+      .join(' ')
     
-      console.log('aria-labelledby:', chineseText);
     if (chineseText) return chineseText;
   }
   
@@ -106,9 +104,8 @@ function getAriaLabel(element) {
 function  getAttributeLabel(element){
    const title = element.getAttribute('title');
    const label = element.getAttribute('label');
-   if (title || label) {
-    return title.trim()  || label.trim();
-  }
+   if (title && title.trim()) return title.trim();
+   if (label && label.trim()) return label.trim();
   return  null;
 }
 
@@ -162,18 +159,6 @@ function getDataAttributesLabel(element) {
     }
   }
   
-  // 检查所有属性中的中文
-  // const attributes = Array.from(element.attributes);
-  // for (const attr of attributes) {
-  //   if (attr.value && /[\u4e00-\u9fa5]{2,}/.test(attr.value)) {
-  //     // 过滤掉URL、类名等
-  //     if (!attr.name.includes('src') && !attr.name.includes('href') && 
-  //         !attr.name.includes('class') && !attr.name.includes('style')) {
-  //       return attr.value.trim();
-  //     }
-  //   }
-  // }
-  
   return null;
 }
 
@@ -186,7 +171,6 @@ function getTextContentLabel(element) {
     textContentStr = element.textContent.trim();
   }else if (['div', 'p', 'span', 'li'].includes(tagName) && element.children.length == 0) {
     textContentStr = element.textContent.trim();
-    console.log('--div-p-span--:', textContentStr);
   }else {
     const parent = element.closest('button, a, [role="button"] , span');
     if(parent){
@@ -201,83 +185,10 @@ function getTextContentLabel(element) {
   return null;
 }
 
-// 查找邻近的label文本
-function getAdjacentLabelText(element) {
-  // 查找前一个兄弟元素中的文本
-  let prev = element.previousElementSibling;
-  while (prev) {
-    if (prev.tagName === 'LABEL') {
-      return prev.textContent.trim();
-    }
-    if (prev.textContent && prev.textContent.trim()) {
-      return prev.textContent.trim();
-    }
-    prev = prev.previousElementSibling;
-  }
-  
-  // 查找父元素中的文本
-  const parentText = element.parentElement.textContent.trim();
-  const elementText = element.textContent || element.value || '';
-  
-  console.log('查找邻近的label文本:', parentText);
-  return parentText.replace(elementText, '').trim();
-}
-
-
-//智能上下文分析
-function getContextualLabel(element) {
-  // 查找最近的容器元素中的文本
-  const containers = ['div', 'section', 'article', 'form', 'fieldset', 'td', 'th'];
-  let container = element.parentElement;
-  
-  while (container) {
-    // 检查容器内的文本结构
-    const text = container.textContent.trim();
-    const elementText = element.textContent || element.value || element.placeholder || '';
-    
-    if (text && text !== elementText) {
-      // 提取可能的中文标签
-      const lines = text.split('\n').map(l => l.trim()).filter(l => l);
-      for (const line of lines) {
-        if (/[\u4e00-\u9fa5]{2,}/.test(line) && 
-            line.length < 50 && // 避免提取大段文本
-            !line.includes(elementText)) {
-          return line;
-        }
-      }
-    }
-    
-    // 检查legend（用于fieldset）
-    if (container.tagName === 'FIELDSET') {
-      const legend = container.querySelector('legend');
-      if (legend && /[\u4e00-\u9fa5]/.test(legend.textContent)) {
-        return legend.textContent.trim();
-      }
-    }
-    
-    // 向上查找
-    container = container.parentElement;
-  }
-  
-  return null;
-}
-
-
-
 //完整整合函数查找元素业务名称
 function getChineseLabelByElement(element) {
   try {
-    // 1. 通过XPath获取元素
-    // const element = document.evaluate(
-    //   xpath,
-    //   document,
-    //   null,
-    //   XPathResult.FIRST_ORDERED_NODE_TYPE,
-    //   null
-    // ).singleNodeValue;
-    
     if (!element) {
-      console.warn('未找到元素:', xpath);
       return null;
     }
     
@@ -296,18 +207,7 @@ function getChineseLabelByElement(element) {
       // 数据属性
       () => getDataAttributesLabel(element),
       // 按钮/链接的文本内容
-      () => getTextContentLabel(element),
-      // 邻近文本
-      // () => getAdjacentLabelText(element),
-      // // 上下文分析
-      // () => getContextualLabel(element),
-      // // value属性（最后的手段）
-      // () => {
-      //   const value = element.getAttribute('value');
-      //   return value && /[\u4e00-\u9fa5]/.test(value) 
-      //     ? value.trim() 
-      //     : null;
-      // }
+      () => getTextContentLabel(element)
     ];
     
     // 执行策略直到找到中文标签
@@ -318,14 +218,6 @@ function getChineseLabelByElement(element) {
         return result.replace(/\s+/g, ' ').replace(/[\r\n\t]/g, '');
       }
     }
-    
-    console.log('未找到中文标签，元素信息:', {
-      tag: element.tagName,
-      id: element.id,
-      class: element.className,
-      type: element.type,
-      allAttributes: Array.from(element.attributes).map(a => `${a.name}="${a.value}"`)
-    });
     
     return null;
     

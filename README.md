@@ -45,7 +45,6 @@ record-tools/
 │   ├── elementBusinessName.js  # 元素业务名称识别
 │   └── pageElementScanner.js   # 页面元素扫描器
 ├── icons/                      # 扩展图标
-├── key.pem                     # 扩展私钥（自行生成）
 └── manifest.json               # Chrome 扩展配置（Manifest V3）
 ```
 
@@ -65,7 +64,7 @@ openssl rsa -in private.pem -pubout -out public.pem
 
 1. 打开 `manifest.json`
 2. 将 `public.pem` 中的公钥内容替换到 `key` 字段中
-3. 将 `private.pem` 重命名为 `key.pem` 并放到项目根目录
+3. 私钥仅用于签名发布包，必须保存在项目目录之外，禁止提交到 Git
 
 ### 3. 加载扩展
 
@@ -554,7 +553,7 @@ sendToContent(tabId, message)
 
 1. 通过 OpenSSL 生成私钥和公钥
 2. 将公钥写入 `manifest.json` 的 `key` 字段
-3. 将私钥重命名为 `key.pem` 放在项目根目录
+3. 将私钥保存在项目目录之外，禁止提交到 Git
 4. 加载扩展程序
 
 ## License

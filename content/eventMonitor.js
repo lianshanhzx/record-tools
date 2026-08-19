@@ -73,8 +73,10 @@ const EventMonitor = {
         target.commandCnStr = '日期选择'
         Recorder.setAttributeAction(target)
       } else {
-        target.command = 'input'
-        target.commandCnStr = '输入'
+        const isSelection = target.tagName === 'SELECT' ||
+          (target.tagName === 'INPUT' && (target.type === 'radio' || target.type === 'checkbox'))
+        target.command = isSelection ? 'select' : 'input'
+        target.commandCnStr = isSelection ? '选择' : '输入'
         Recorder.setAttributeAction(target)
       }
     }
@@ -101,9 +103,11 @@ const EventMonitor = {
       const dateIpt = target.closest(".el-date-editor, .tsscdatepicker");
       if (selectEle) {
         const selectInputEle = selectEle.querySelector('input')
-        selectInputEle.command = 'select'
-        selectInputEle.commandCnStr = '下拉框xpath选择'
-        Recorder.setAttributeAction(selectInputEle);
+        if (selectInputEle) {
+          selectInputEle.command = 'select'
+          selectInputEle.commandCnStr = '下拉框xpath选择'
+          Recorder.setAttributeAction(selectInputEle);
+        }
 
       } else if (selectOptionEle) {
         selectOptionEle.command = 'selectOption'
@@ -154,6 +158,5 @@ const EventMonitor = {
     this._changeHandler = null
     this._clickHandler = null
     this._listening = false
-    console.log('---unlistener--- 事件监听已移除')
   }
 }

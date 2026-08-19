@@ -54,17 +54,12 @@ function continueRecordEvent() {
  * 调用位置：content/messageHandler.js → onMessage (pauseRecording)
  */
 function pauseRecordEvent() {
-  const actions = Recorder.getActions().map(item => {
-    return {
-      ...item,
-      name: Recorder.nameMap[item.id] || ''
-    }
-  })
+  EventMonitor.unlistener()
   // 调用 recorder.js → destroy
   Recorder.destroy()
   if (typeof PageElementScannerController !== 'undefined') PageElementScannerController.pause()
   // 调用 messageHandler.js → sendBackMessage
-  MessageHandler.sendBackMessage('stopRecord', actions);
+  MessageHandler.sendBackMessage('stopRecord', {});
 }
 
 /**
@@ -72,15 +67,10 @@ function pauseRecordEvent() {
  * 调用位置：content/messageHandler.js → onMessage (stopRecording)
  */
 function stopRecordEvent() {
-  const actions = Recorder.getActions().map(item => {
-    return {
-      ...item,
-      name: Recorder.nameMap[item.id] || ''
-    }
-  })
+  EventMonitor.unlistener()
   // 调用 recorder.js → destroy
   Recorder.destroy()
   if (typeof PageElementScannerController !== 'undefined') PageElementScannerController.pause()
   // 调用 messageHandler.js → sendBackMessage
-  MessageHandler.sendBackMessage('stopRecord', actions);
+  MessageHandler.sendBackMessage('stopRecord', {});
 }

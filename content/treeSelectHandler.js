@@ -22,7 +22,15 @@ const TreeSelectHandler = {
     if (!input || input.closest('.el-select')) {
       return null
     }
-    return input
+    const treeSelectRoot = input.closest(
+      '.el-tree-select, .tree-select, .ant-tree-select, .ivu-tree-select, .t-tree-select, ' +
+      '[data-tree-select], [aria-haspopup="tree"]'
+    )
+    if (treeSelectRoot) return input
+
+    const controlledId = input.getAttribute('aria-controls') || input.getAttribute('aria-owns')
+    const controlled = controlledId ? document.getElementById(controlledId) : null
+    return controlled?.querySelector('.el-tree, [role="tree"], .ant-tree, .ivu-tree, .t-tree') ? input : null
   },
 
   /**

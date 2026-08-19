@@ -38,20 +38,13 @@
         "matches": [
           "http://101.89.127.196/*",
           "http://101.89.127.199/*",
-          "http://11.1.198.131/*", //低版本浏览器需要配置自动化IP
-          
-          "*://*/*",
-          "http://*/*",
-          "https://*/*",
-          "<all_urls>"
-       
+          "http://11.1.198.131/*"
          ]
     },
       
     "permissions": [
         "storage",
         "activeTab", 
-        "notifications",
         "scripting",
         "windows",
         "downloads",

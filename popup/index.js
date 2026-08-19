@@ -77,7 +77,7 @@ async function getCurrentTab() {
   for (const t of all) {
     if (t.url && !t.url.startsWith('chrome-extension://')) return t
   }
-  return tabs[0]
+  return null
 }
 
 /**
@@ -151,7 +151,7 @@ function initRecordControls() {
       const resp = await chrome.tabs.sendMessage(tab.id, { type })
       return resp
     } catch (e) {
-      console.log('发送消息失败:', e.message)
+      console.warn('发送消息失败:', e.message)
     }
   }
 

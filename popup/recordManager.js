@@ -103,17 +103,13 @@ const RecordManager = {
   },
 
   /**
-   * 把 currentRecordInfo 的修改写回列表并刷新渲染。
-   * 注意：recordInfoLit 中的对象与 currentRecordInfo 是同引用，因此这里的
-   * 循环其实只是"确认存在"，真正的写回通过引用直接生效。
+   * 刷新 currentRecordInfo 修改后的列表。
+   * recordInfoLit 中的对象与 currentRecordInfo 是同引用，修改已直接生效。
    * 调用位置：popup/index.js → saveCmdBtn / saveNameBtn / saveValBtn 点击
    * （deleteCmdBtn 不经过这里，直接在事件里过滤列表后重渲染）。
    */
   updateRecorder() {
-    for (let item of this.recordInfoLit) {
-      if (item.id === this.currentRecordInfo.id) { item = this.currentRecordInfo; break }
-    }
-    setTimeout(() => this.renderRecordList(this.recordInfoLit), 0)
+    this.renderRecordList(this.recordInfoLit)
   },
 
   /**
@@ -422,20 +418,6 @@ const RecordManager = {
       if (!hasA && hasB) return 1
       return (a.timestamp || 0) - (b.timestamp || 0)
     })
-  },
-
-  /**
-   * 计算同名 propertiesName 的数量，用于去重命名。
-   * 只比较 '-' 分隔后的首段：同名元素按"名称-N"递增命名，N 为已存在的同名个数。
-   * 注意：与 computedSameContextName 不同，本方法不限定锚点上下文，
-   * 且当前无调用方（保留为历史语义）。
-   */
-  computedSamePropertiesName(list, name) {
-    return list.filter(item => {
-      if (!item.propertiesName) return false
-      const arr = item.propertiesName.split('-')
-      return arr[0] === name
-    }).length
   },
 
   /**
