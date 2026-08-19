@@ -48,6 +48,23 @@ const RecordManager = {
   // pageKey -> 页面展示顺序（页面首次出现的先后）。
   pageOrderMap: new Map(),
   nextPageOrder: 0,
+  // 当前待粘贴记录的内部 key；仅在 popup 生命周期内保留。
+  cutRecordKey: '',
+  // 用户首次调整顺序后启用，避免后续渲染再次按 scanIndex 还原。
+  manualOrderEnabled: false,
+  nextRecordKey: 1,
+  deletedScanKeys: new Set(),
+
+  /** 为 DOM 操作分配稳定 key，避免依赖可能重复的 id/timestamp。 */
+  ensureRecordKey(item) {
+    if (item && !item._recordKey) item._recordKey = 'record-' + this.nextRecordKey++
+    return item ? item._recordKey : ''
+  },
+
+  getScanKey(item) {
+    if (!item || !item.target) return ''
+    return (item.pageKey || '') + '\n' + (item.target || '') + '\n' + (item.anchorTarget || '')
+  },
 
   /** 为记录分配/复用页面顺序号，保证同一页面的记录在排序中始终相邻。 */
   ensurePageOrder(item) {
@@ -62,6 +79,8 @@ const RecordManager = {
   /** 合并增量扫描元素快照：与已存在元素按三元组去重，命中则覆盖式合并，否则追加。 */
   mergeScannedElements(elements) {
     for (const incoming of elements || []) {
+      const scanKey = this.getScanKey(incoming)
+      if (scanKey && this.deletedScanKeys.has(scanKey)) continue
       this.ensurePageOrder(incoming)
       const index = this.scannedElementList.findIndex(item =>
         item.target === incoming.target &&
@@ -113,13 +132,15 @@ const RecordManager = {
 
     /**
      * 渲染单条记录行，depth 用于计算缩进。
-     * 行 id 由 item.id + '_' + item.timestamp 组成，供行点击时反查记录。
+     * 每行通过内部稳定 key 供按钮和行点击反查记录。
      */
     function renderRow(item, depth) {
       let name = item.propertiesName
       if (!name && item.attributes && item.attributes.placeholder) name = item.attributes.placeholder
       idx++
       const indent = 16 + depth * 14
+      const recordKey = self.ensureRecordKey(item)
+      const isCut = self.cutRecordKey === recordKey
 
       // 人工录制标记
       const manualBadge = item.manualRecord ? '<span class="manual-badge">人工</span>' : ''
@@ -137,7 +158,7 @@ const RecordManager = {
         valTitle = (item.value || '') + '\n选项：' + item.options.join(' / ')
       }
 
-      html += '<div class="list-row" style="padding-left:' + indent + 'px" id="' + item.id + '_' + item.timestamp + '">'
+      html += '<div class="list-row' + (isCut ? ' cut-pending' : '') + '" style="padding-left:' + indent + 'px" data-record-key="' + escHtml(recordKey) + '">'
       html += '<span class="col-seq">' + idx + '</span>'
       html += '<span class="col-cmd">' + escHtml(item.command || '') + '</span>'
       html += '<span class="col-name" title="' + escHtml(name || '') + '">' + manualBadge + escHtml(name || '') + anchorBadge + '</span>'
@@ -146,6 +167,14 @@ const RecordManager = {
       html += '<button type="button" class="copy-target-btn" title="复制 Target">复制</button>'
       html += '</span>'
       html += '<span class="col-val" title="' + escHtml(valTitle) + '">' + escHtml(valText) + '</span>'
+      html += '<span class="col-actions">'
+      if (self.cutRecordKey && !isCut) {
+        html += '<button type="button" class="row-action-btn paste-record-btn" data-record-key="' + escHtml(recordKey) + '">粘贴</button>'
+      } else {
+        html += '<button type="button" class="row-action-btn cut-record-btn" data-record-key="' + escHtml(recordKey) + '">' + (isCut ? '已剪切' : '剪切') + '</button>'
+      }
+      html += '<button type="button" class="row-action-btn delete-record-btn" data-record-key="' + escHtml(recordKey) + '">删除</button>'
+      html += '</span>'
       html += '</div>'
     }
 
@@ -378,6 +407,11 @@ const RecordManager = {
    */
   sortByScanIndex(data) {
     return (data || []).slice().sort((a, b) => {
+      if (this.manualOrderEnabled) {
+        const orderA = typeof a.manualOrder === 'number' ? a.manualOrder : Number.MAX_SAFE_INTEGER
+        const orderB = typeof b.manualOrder === 'number' ? b.manualOrder : Number.MAX_SAFE_INTEGER
+        if (orderA !== orderB) return orderA - orderB
+      }
       const pageA = typeof a.pageOrder === 'number' ? a.pageOrder : 0
       const pageB = typeof b.pageOrder === 'number' ? b.pageOrder : 0
       if (pageA !== pageB) return pageA - pageB
@@ -417,6 +451,78 @@ const RecordManager = {
     })
   },
 
+  refreshVisibleRecords() {
+    this.recordInfoLit = this.sortByScanIndex(
+      this.filterRecordListData(this.recordActionList).filter(item => this.isVisibleRecord(item))
+    )
+    this.renderRecordList(this.recordInfoLit)
+    this.updateRecordCount()
+  },
+
+  getRecordByKey(recordKey) {
+    return this.recordActionList.find(item => this.ensureRecordKey(item) === recordKey) || null
+  },
+
+  clearCurrentRecord() {
+    this.currentRecordInfo = {}
+    $('#editCmd').val('')
+    $('#editName').val('')
+    $('#editVal').val('')
+  },
+
+  deleteRecord(recordKey) {
+    const record = this.getRecordByKey(recordKey)
+    if (!record) return false
+    const scanKey = this.getScanKey(record)
+    if (scanKey) this.deletedScanKeys.add(scanKey)
+    this.recordActionList = this.recordActionList.filter(item => item !== record)
+    if (scanKey) {
+      this.scannedElementList = this.scannedElementList.filter(item => this.getScanKey(item) !== scanKey)
+    }
+    if (this.currentRecordInfo === record) this.clearCurrentRecord()
+    if (this.cutRecordKey === recordKey) this.cutRecordKey = ''
+    this.refreshVisibleRecords()
+    return true
+  },
+
+  cutRecord(recordKey) {
+    if (!this.getRecordByKey(recordKey)) return
+    this.cutRecordKey = recordKey
+    this.renderRecordList(this.recordInfoLit)
+  },
+
+  pasteRecordBefore(targetRecordKey) {
+    const source = this.getRecordByKey(this.cutRecordKey)
+    const target = this.getRecordByKey(targetRecordKey)
+    if (!source || !target || source === target) return false
+
+    const sourceScanKey = this.getScanKey(source)
+    if (sourceScanKey) {
+      this.deletedScanKeys.add(sourceScanKey)
+      this.scannedElementList = this.scannedElementList.filter(item => this.getScanKey(item) !== sourceScanKey)
+    }
+
+    // 跨分组移动时采用目标记录的页面、分组及锚点上下文。
+    source.group = Array.isArray(target.group) ? target.group.map(group => Object.assign({}, group)) : []
+    source.pageKey = target.pageKey
+    source.pageUrl = target.pageUrl
+    source.routeIdentity = target.routeIdentity
+    source.pageOrder = target.pageOrder
+    source.anchorTarget = target.anchorTarget || ''
+    source.anchorPropertiesName = target.anchorPropertiesName || ''
+
+    const ordered = this.sortByScanIndex(this.recordActionList).filter(item => item !== source)
+    const targetIndex = ordered.indexOf(target)
+    if (targetIndex < 0) return false
+    ordered.splice(targetIndex, 0, source)
+    ordered.forEach((item, index) => { item.manualOrder = index })
+    this.recordActionList = ordered
+    this.manualOrderEnabled = true
+    this.cutRecordKey = ''
+    this.refreshVisibleRecords()
+    return true
+  },
+
   /**
    * 同名去重只在同一锚点上下文内执行，不同按钮打开的复用弹窗保留各自原始字段名。
    */
@@ -443,6 +549,9 @@ const RecordManager = {
   handleMessage(message) {
     if (message.type !== 'addActionData' && message.type !== 'startRecord' && message.type !== 'addScannedElements') return;
     if (message.type === 'addActionData') {
+      const scanKey = this.getScanKey(message.data)
+      if (scanKey) this.deletedScanKeys.delete(scanKey)
+      this.ensureRecordKey(message.data)
       this.ensurePageOrder(message.data)
       const target = message.data.target
       const name = message.data.propertiesName
@@ -494,6 +603,9 @@ const RecordManager = {
       }
       this.mergeScannedElements(elements)
       for (const el of elements) {
+        const scanKey = this.getScanKey(el)
+        if (scanKey && this.deletedScanKeys.has(scanKey)) continue
+        this.ensureRecordKey(el)
         this.ensurePageOrder(el)
         const target = el.target
         const name = el.propertiesName
@@ -558,6 +670,10 @@ const RecordManager = {
     this.currentPageKey = ''
     this.pageOrderMap = new Map()
     this.nextPageOrder = 0
+    this.cutRecordKey = ''
+    this.manualOrderEnabled = false
+    this.nextRecordKey = 1
+    this.deletedScanKeys = new Set()
     this.updateRecordCount()
   },
 
@@ -588,7 +704,16 @@ const RecordManager = {
 
     this.recordActionList = this.recordActionList.filter(item => !items.has(item))
     this.recordInfoLit = this.recordInfoLit.filter(item => !items.has(item))
-    this.currentRecordInfo = {}
+    items.forEach(item => {
+      const scanKey = this.getScanKey(item)
+      if (scanKey) this.deletedScanKeys.add(scanKey)
+    })
+    this.scannedElementList = this.scannedElementList.filter(item => {
+      const scanKey = this.getScanKey(item)
+      return !scanKey || !this.deletedScanKeys.has(scanKey)
+    })
+    if (items.has(this.currentRecordInfo)) this.clearCurrentRecord()
+    if ([...items].some(item => this.ensureRecordKey(item) === this.cutRecordKey)) this.cutRecordKey = ''
 
     // 递归清理该组及其子组的截图引用与折叠状态，避免残留孤儿数据。
     function clearGroupState(currentNode, manager) {
@@ -675,6 +800,8 @@ const RecordManager = {
         pageUrl,
         routeIdentity,
         pageOrder,
+        manualOrder,
+        _recordKey,
         ...action
       } = item
       const attr = Object.assign({}, attributes || {})
@@ -725,7 +852,7 @@ const RecordManager = {
    *
    * 绑定清单：
    *   - 保存命令 / 名称 / 值：把输入框值写回 currentRecordInfo 后刷新列表。
-   *   - 删除记录：直接从两个列表按 id 过滤，不经过 updateRecorder。
+   *   - 剪切、粘贴、删除普通操作记录。
    *   - 复制 Target 按钮、行点击（选中并回填编辑框）。
    *   - 分组操作：截图、查看截图列表、删除分组。
    *   - 截图对话框 / 预览 / 单张删除。
@@ -740,12 +867,12 @@ const RecordManager = {
       self.updateRecorder()
     })
 
-    // 删除当前选中记录（列表对象引用与 currentRecordInfo 一致，按 id 过滤即可）
+    // 删除当前选中记录。
     $('#deleteCmdBtn').click(function () {
-      self.recordActionList = self.recordActionList.filter(item => item.id !== self.currentRecordInfo.id)
-      self.recordInfoLit = self.recordInfoLit.filter(item => item.id !== self.currentRecordInfo.id)
-      setTimeout(() => self.renderRecordList(self.recordInfoLit), 0)
-      self.updateRecordCount()
+      const recordKey = self.ensureRecordKey(self.currentRecordInfo)
+      if (!recordKey) return
+      if (!confirm('确定删除当前操作吗？此操作无法撤销。')) return
+      self.deleteRecord(recordKey)
     })
 
     // 保存编辑后的名称
@@ -799,17 +926,31 @@ const RecordManager = {
       })
     })
 
-    // 行点击：唯一高亮当前行，并按 id_timestamp 反查记录填入编辑框。
+    $(document).on('click', '.cut-record-btn', function (e) {
+      e.preventDefault()
+      e.stopImmediatePropagation()
+      self.cutRecord($(this).attr('data-record-key'))
+    })
+
+    $(document).on('click', '.paste-record-btn', function (e) {
+      e.preventDefault()
+      e.stopImmediatePropagation()
+      self.pasteRecordBefore($(this).attr('data-record-key'))
+    })
+
+    $(document).on('click', '.delete-record-btn', function (e) {
+      e.preventDefault()
+      e.stopImmediatePropagation()
+      const recordKey = $(this).attr('data-record-key')
+      if (!confirm('确定删除本行操作吗？此操作无法撤销。')) return
+      self.deleteRecord(recordKey)
+    })
+
+    // 行点击：唯一高亮当前行，并按稳定记录 key 反查记录填入编辑框。
     $(document).on('click', '.list-row', function () {
       $(this).siblings().removeClass('active')
       $(this).addClass('active')
-      const id = $(this).attr('id')
-      for (let item of self.recordInfoLit) {
-        if (item.id + '_' + item.timestamp === id) {
-          self.currentRecordInfo = item
-          break
-        }
-      }
+      self.currentRecordInfo = self.getRecordByKey($(this).attr('data-record-key')) || {}
       $('#editCmd').val(self.currentRecordInfo.command || '')
       $('#editName').val(self.currentRecordInfo.propertiesName || '')
       $('#editVal').val(self.currentRecordInfo.value || '')

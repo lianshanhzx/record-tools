@@ -58,7 +58,6 @@ const EventMonitor = {
    */
   listener(doc) {
     if (this._listening) return
-    console.log('---listener---', doc)
 
     this._docu = doc
     this._listening = true

@@ -37,8 +37,6 @@ async function clearPreviousScreenshots() {
 
 // ==================== 消息路由 ====================
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  console.log('---监听消息---', message, sender)
-
   let requestType = message.type;
 
   // 高频广播消息短路返回（目标为 Popup，Background 无需处理）
@@ -67,7 +65,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     chrome.storage.session.get([RECORDING_TAB_IDS_KEY, 'popupTargetTabId']).then(stored => {
       const tabMonitorStates = monitorStates[tabId] || (stored[RECORDING_TAB_IDS_KEY] || []).includes(tabId)
       if (tabMonitorStates) monitorStates[tabId] = true
-      console.log('---initMonitor---', tabMonitorStates)
+      
       sendResponse({
         monitorStates: tabMonitorStates,
         popupOpen: stored.popupTargetTabId === tabId
@@ -155,7 +153,6 @@ chrome.action.onClicked.addListener(async (tab) => {
 
 // ==================== 外部消息监听 ====================
 chrome.runtime.onMessageExternal.addListener(function (request, sender, sendResponse) {
-  console.log('---runtime--recordActionList--', request)
   const ty_atp_data = JSON.stringify(request);
   chrome.storage.sync.set({ tyAtpData: ty_atp_data })
   // 外部系统唤起新录制会话前，同样清理上次会话生成的截图。

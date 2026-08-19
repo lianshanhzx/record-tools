@@ -274,6 +274,8 @@ body {
 }
 .list-row:hover { background: #f8f9fb; }
 .list-row.active { background: #e8f0fe; border-top: 1px solid #1a73e8; border-bottom: 1px solid #1a73e8; }
+.list-row.cut-pending { background: #dfe9f1; }
+.list-row.cut-pending:hover { background: #d7e3ed; }
 .col-seq { width: 48px; flex-shrink: 0; color: #8090a8; }
 .col-cmd { width: 76px; flex-shrink: 0; }
 .col-name { width: 22%; flex-shrink: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -295,6 +297,29 @@ body {
 .copy-target-btn:hover { border-color: #1a73e8; color: #1a73e8; background: #f0f6ff; }
 .copy-target-btn.copied { border-color: #34a853; color: #34a853; background: #e6f4ea; }
 .col-val { width: 18%; flex-shrink: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.col-actions {
+    width: 112px;
+    flex-shrink: 0;
+    display: flex;
+    justify-content: flex-end;
+    align-items: center;
+    gap: 5px;
+}
+.row-action-btn {
+    padding: 1px 6px;
+    border: 1px solid #b8c4d6;
+    border-radius: 3px;
+    background: #fff;
+    color: #40536d;
+    font-size: 10px;
+    line-height: 16px;
+    cursor: pointer;
+}
+.row-action-btn:hover { border-color: #1a73e8; color: #1a73e8; background: #f0f6ff; }
+.cut-pending .cut-record-btn { border-color: #7890a6; color: #52697d; background: #edf3f7; cursor: default; }
+.paste-record-btn { border-color: #1a73e8; color: #1a73e8; }
+.delete-record-btn { border-color: #ea4335; color: #c5221f; }
+.delete-record-btn:hover { border-color: #ea4335; color: #c5221f; background: #fce8e6; }
 
 .manual-badge {
     display: inline-block;

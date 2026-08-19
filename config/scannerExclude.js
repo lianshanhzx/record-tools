@@ -22,6 +22,7 @@ const PageElementScannerExcludeConfig = (function () {
     // 排除区域的 CSS 选择器列表 , 可以浏览器检查中选中元素然后复制元素的选择器(copy selector)
     // 元素自身或其任一祖先命中该选择器，则跳过。
     excludedSelectors: [
+      '#__record_tools_scan_overlay__', // 录制工具扫描时注入的网页蒙层
       '#app > div > section > div.headerbox', //信贷系统的顶部栏内容
       'table', // 表格(table)内的元素不扫描
       // 翻页相关组件不扫描

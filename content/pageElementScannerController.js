@@ -20,6 +20,7 @@ const PageElementScannerController = (function () {
 
   const POPUP_OPEN = 'popupOpened'
   const POPUP_CLOSE = 'popupClosed'
+  const SCAN_OVERLAY_ID = '__record_tools_scan_overlay__'
 
   const config = {
     // 变化触发后等待多久再扫描，避免连续变化导致重复扫描
@@ -42,6 +43,10 @@ const PageElementScannerController = (function () {
   }
 
   let popupOpen = false
+  let scanOverlayCount = 0
+  let scanLifecycleVersion = 0
+  let fullScanToken = null
+  let scanOverlayKeydownListener = null
   let observer = null
   let debounceTimer = null
   let lastScanTime = 0
@@ -75,6 +80,80 @@ const PageElementScannerController = (function () {
   let clickListener = null
 
   // ==================== 基础工具 ====================
+
+  /** 在业务网页上显示扫描蒙层，阻止扫描期间继续操作页面。 */
+  function showScanOverlay() {
+    let overlay = document.getElementById(SCAN_OVERLAY_ID)
+    if (!overlay) {
+      overlay = document.createElement('div')
+      overlay.id = SCAN_OVERLAY_ID
+      overlay.setAttribute('role', 'status')
+      overlay.setAttribute('aria-live', 'assertive')
+      overlay.setAttribute('aria-label', '正在扫描中, 请等扫描结束再操作~')
+      overlay.style.cssText = [
+        'position:fixed',
+        'inset:0',
+        'z-index:2147483647',
+        'display:flex',
+        'align-items:center',
+        'justify-content:center',
+        'background:rgba(15,23,42,0.58)',
+        'pointer-events:auto',
+        'cursor:wait'
+      ].join(';')
+
+      const message = document.createElement('div')
+      message.textContent = '正在扫描中, 请等扫描结束再操作~'
+      message.style.cssText = [
+        'padding:18px 28px',
+        'border-radius:8px',
+        'background:rgba(17,24,39,0.92)',
+        'box-shadow:0 12px 36px rgba(0,0,0,0.28)',
+        'color:#fff',
+        'font:600 16px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif',
+        'letter-spacing:0.2px',
+        'text-align:center'
+      ].join(';')
+      overlay.appendChild(message)
+      overlay.addEventListener('wheel', event => event.preventDefault(), { passive: false })
+      overlay.addEventListener('touchmove', event => event.preventDefault(), { passive: false })
+      ;(document.body || document.documentElement).appendChild(overlay)
+    }
+    if (!scanOverlayKeydownListener) {
+      scanOverlayKeydownListener = event => event.preventDefault()
+      document.addEventListener('keydown', scanOverlayKeydownListener, true)
+    }
+  }
+
+  function removeScanOverlay() {
+    const overlay = document.getElementById(SCAN_OVERLAY_ID)
+    if (overlay) overlay.remove()
+    if (scanOverlayKeydownListener) {
+      document.removeEventListener('keydown', scanOverlayKeydownListener, true)
+      scanOverlayKeydownListener = null
+    }
+  }
+
+  /** 等待浏览器绘制蒙层；返回 null 表示等待期间 popup 已关闭。 */
+  async function beginScanOverlay() {
+    const version = scanLifecycleVersion
+    scanOverlayCount++
+    showScanOverlay()
+    await new Promise(resolve => requestAnimationFrame(() => setTimeout(resolve, 0)))
+    return popupOpen && version === scanLifecycleVersion ? version : null
+  }
+
+  function endScanOverlay(version) {
+    if (version !== scanLifecycleVersion) return
+    scanOverlayCount = Math.max(0, scanOverlayCount - 1)
+    if (scanOverlayCount === 0) removeScanOverlay()
+  }
+
+  function forceRemoveScanOverlay() {
+    scanLifecycleVersion++
+    scanOverlayCount = 0
+    removeScanOverlay()
+  }
 
   /**
    * 判断元素是否在 DOM 中且可见。
@@ -506,31 +585,49 @@ const PageElementScannerController = (function () {
    * @param {string} reason 扫描触发原因，用于日志
    * @param {boolean} force 是否忽略最小扫描间隔强制扫描
    */
-  function fullScan(reason, force = false) {
+  async function fullScan(reason, force = false) {
     const now = Date.now()
-    if (!force && now - lastScanTime < config.minIntervalMs) return
+    if (!popupOpen ||
+        (fullScanToken && fullScanToken.version === scanLifecycleVersion) ||
+        (!force && now - lastScanTime < config.minIntervalMs)) {
+      return getScannedElementCount()
+    }
+    const scanToken = { version: scanLifecycleVersion }
+    fullScanToken = scanToken
 
     notifyScanStatus('scanning', getScannedElementCount())
-    pendingScanAnchor = null
-    const page = activatePageContext()
-    for (const [contextKey, info] of scannedElementMap) {
-      if (info.pageKey === page.key) scannedElementMap.delete(contextKey)
+    const overlayVersion = await beginScanOverlay()
+    if (overlayVersion === null) {
+      if (fullScanToken === scanToken) fullScanToken = null
+      return getScannedElementCount()
     }
-    activeAnchorByElement = new WeakMap()
-    lastTrigger = null
-    const results = scanRoot(document, reason)
-    results.forEach(info => {
-      info.pageKey = page.key
-      info.pageUrl = page.url
-      info.routeIdentity = page.routeIdentity
-      info.pageOrder = pageOrderMap.get(page.key)
-      info._contextUpdatedAt = Date.now()
-      scannedElementMap.set(makeContextKey(info.pageKey, info.target, ''), info)
-    })
 
-    const count = notifyPopup(page.key)
-    notifyScanStatus('completed', count)
-    lastScanTime = Date.now()
+    try {
+      pendingScanAnchor = null
+      const page = activatePageContext()
+      for (const [contextKey, info] of scannedElementMap) {
+        if (info.pageKey === page.key) scannedElementMap.delete(contextKey)
+      }
+      activeAnchorByElement = new WeakMap()
+      lastTrigger = null
+      const results = scanRoot(document, reason)
+      results.forEach(info => {
+        info.pageKey = page.key
+        info.pageUrl = page.url
+        info.routeIdentity = page.routeIdentity
+        info.pageOrder = pageOrderMap.get(page.key)
+        info._contextUpdatedAt = Date.now()
+        scannedElementMap.set(makeContextKey(info.pageKey, info.target, ''), info)
+      })
+
+      const count = notifyPopup(page.key)
+      notifyScanStatus('completed', count)
+      lastScanTime = Date.now()
+      return count
+    } finally {
+      if (fullScanToken === scanToken) fullScanToken = null
+      endScanOverlay(overlayVersion)
+    }
   }
 
   /**
@@ -577,11 +674,15 @@ const PageElementScannerController = (function () {
    * @param {string} reason 扫描触发原因
    * @param {Element|null} [anchorElement] 触发本次变化的按钮类元素（可选）
    */
-  function scanRegions(roots, reason, anchorElement = null) {
+  async function scanRegions(roots, reason, anchorElement = null) {
+    if (!popupOpen) return
     const now = Date.now()
     if (now - lastScanTime < config.minIntervalMs) {
       const remaining = config.minIntervalMs - (now - lastScanTime)
-      setTimeout(() => scanRegions(roots, reason, anchorElement), remaining)
+      const scheduledVersion = scanLifecycleVersion
+      setTimeout(() => {
+        if (popupOpen && scheduledVersion === scanLifecycleVersion) scanRegions(roots, reason, anchorElement)
+      }, remaining)
       return
     }
     if (roots.length === 0) {
@@ -590,70 +691,76 @@ const PageElementScannerController = (function () {
     }
 
     notifyScanStatus('scanning', getScannedElementCount())
+    const overlayVersion = await beginScanOverlay()
+    if (overlayVersion === null) return
 
-    // 解析锚点信息
-    let anchorTarget = null
-    let anchorPropertiesName = null
-    if (anchorElement) {
-      const anchorContext = resolveAnchorContext(anchorElement)
-      if (anchorContext) {
-        anchorTarget = anchorContext.target
-        anchorPropertiesName = anchorContext.propertiesName
+    try {
+      // 解析锚点信息
+      let anchorTarget = null
+      let anchorPropertiesName = null
+      if (anchorElement) {
+        const anchorContext = resolveAnchorContext(anchorElement)
+        if (anchorContext) {
+          anchorTarget = anchorContext.target
+          anchorPropertiesName = anchorContext.propertiesName
+        }
       }
-    }
 
-    const allResults = []
-    const actualRoots = []
+      const allResults = []
+      const actualRoots = []
 
-    for (const root of roots) {
-      if (!isVisibleElement(root)) continue
-      const results = scanRoot(root, reason)
+      for (const root of roots) {
+        if (!isVisibleElement(root)) continue
+        const results = scanRoot(root, reason)
 
-      if (results.length > 0) {
-        allResults.push(...results)
-        actualRoots.push(root)
-      } else if (root.parentElement &&
-                 root.parentElement !== document.body &&
-                 root.parentElement !== document.documentElement) {
-        const parent = root.parentElement
-        // 避免同一个父节点被多次扫描
-        if (!actualRoots.includes(parent)) {
-          const parentResults = scanRoot(parent, reason)
-          if (parentResults.length > 0) {
-            console.log(`[ScannerController] ${reason} 根节点 ${root.nodeName} 无元素，向上扫描父节点 ${parent.nodeName}，共 ${parentResults.length} 个元素`)
-            allResults.push(...parentResults)
-            actualRoots.push(parent)
+        if (results.length > 0) {
+          allResults.push(...results)
+          actualRoots.push(root)
+        } else if (root.parentElement &&
+                   root.parentElement !== document.body &&
+                   root.parentElement !== document.documentElement) {
+          const parent = root.parentElement
+          // 避免同一个父节点被多次扫描
+          if (!actualRoots.includes(parent)) {
+            const parentResults = scanRoot(parent, reason)
+            if (parentResults.length > 0) {
+              console.log(`[ScannerController] ${reason} 根节点 ${root.nodeName} 无元素，向上扫描父节点 ${parent.nodeName}，共 ${parentResults.length} 个元素`)
+              allResults.push(...parentResults)
+              actualRoots.push(parent)
+            }
           }
         }
       }
-    }
 
-    if (actualRoots.length === 0) {
-      notifyScanStatus('completed', getScannedElementCount())
+      if (actualRoots.length === 0) {
+        notifyScanStatus('completed', getScannedElementCount())
+        pendingScanAnchor = null
+        return
+      }
+
+      // 为本次新扫描到的元素标记锚点（首次为准，已存在锚点的元素不会被覆盖）
+      let anchoredCount = 0
+      if (anchorTarget) {
+        allResults.forEach(info => {
+          if (info.target === anchorTarget) return
+          if (!info._anchorTarget) {
+            info._anchorTarget = anchorTarget
+            info._anchorPropertiesName = anchorPropertiesName || ''
+            anchoredCount++
+          }
+        })
+        console.log(`[ScannerController] 本次增量扫描使用锚点: ${anchorTarget} (${anchorPropertiesName})，锚定 ${anchoredCount}/${allResults.length} 个元素`)
+      } else if (anchorElement) {
+        console.warn('[ScannerController] 存在触发按钮但未能解析为有效锚点:', anchorElement)
+      }
+
+      const count = mergeRegionResults(allResults, actualRoots)
+      notifyScanStatus('completed', count)
       pendingScanAnchor = null
-      return
+      lastScanTime = Date.now()
+    } finally {
+      endScanOverlay(overlayVersion)
     }
-
-    // 为本次新扫描到的元素标记锚点（首次为准，已存在锚点的元素不会被覆盖）
-    let anchoredCount = 0
-    if (anchorTarget) {
-      allResults.forEach(info => {
-        if (info.target === anchorTarget) return
-        if (!info._anchorTarget) {
-          info._anchorTarget = anchorTarget
-          info._anchorPropertiesName = anchorPropertiesName || ''
-          anchoredCount++
-        }
-      })
-      console.log(`[ScannerController] 本次增量扫描使用锚点: ${anchorTarget} (${anchorPropertiesName})，锚定 ${anchoredCount}/${allResults.length} 个元素`)
-    } else if (anchorElement) {
-      console.warn('[ScannerController] 存在触发按钮但未能解析为有效锚点:', anchorElement)
-    }
-
-    const count = mergeRegionResults(allResults, actualRoots)
-    notifyScanStatus('completed', count)
-    pendingScanAnchor = null
-    lastScanTime = Date.now()
   }
 
   // ==================== 路由变化扫描 ====================
@@ -947,10 +1054,10 @@ const PageElementScannerController = (function () {
 
   // ==================== 消息处理 ====================
 
-  function onPopupOpened() {
+  async function onPopupOpened() {
     popupOpen = true
     startObserver()
-    fullScan('popupOpened')
+    await fullScan('popupOpened')
     const count = (typeof Recorder !== 'undefined' && Recorder.scannedPageElements)
       ? Recorder.scannedPageElements.length
       : 0
@@ -959,6 +1066,7 @@ const PageElementScannerController = (function () {
 
   function onPopupClosed() {
     popupOpen = false
+    forceRemoveScanOverlay()
     stopObserver()
     clearData()
   }
@@ -984,8 +1092,9 @@ const PageElementScannerController = (function () {
   function initMessageListener() {
     chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       if (request.type === POPUP_OPEN) {
-        const count = onPopupOpened()
-        sendResponse({ status: 'popupOpened', count: count })
+        onPopupOpened()
+          .then(count => sendResponse({ status: 'popupOpened', count: count }))
+          .catch(error => sendResponse({ status: 'popupOpened', error: error.message }))
         return true
       }
       if (request.type === POPUP_CLOSE) {
@@ -1000,10 +1109,8 @@ const PageElementScannerController = (function () {
         pendingRoots = []
         clearData()
         fullScan('reRecord', true)
-        const count = (typeof Recorder !== 'undefined' && Recorder.scannedPageElements)
-          ? Recorder.scannedPageElements.length
-          : 0
-        sendResponse({ status: 'clearedAndRescanned', count: count })
+          .then(count => sendResponse({ status: 'clearedAndRescanned', count: count }))
+          .catch(error => sendResponse({ status: 'clearedAndRescanned', error: error.message }))
         return true
       }
       return false
