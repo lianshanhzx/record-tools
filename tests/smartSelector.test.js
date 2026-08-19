@@ -106,6 +106,103 @@
     assert(classCandidate.xpath.indexOf("concat(' ', normalize-space(@class), ' ')") !== -1, 'class 仍使用模糊子串匹配');
   });
 
+  test('短按钮文字优先于普通业务属性', function () {
+    mount('<button name="saveAction" title="保存当前数据" class="save-button">保存</button>');
+    const result = assertSelector(fixtures.querySelector('button'), 'button_text');
+    assert(result.xpath === "//button[normalize-space(.)='保存']", `按钮 XPath 不符合预期: ${result.xpath}`);
+  });
+
+  test('稳定 id 仍高于短按钮文字', function () {
+    mount('<button id="save-button">保存</button>');
+    const result = assertSelector(fixtures.querySelector('button'), 'stable_id');
+    assert(result.xpath === "//*[@id='save-button']", '稳定 id 不应被按钮文本覆盖');
+  });
+
+  test('长按钮文字不压过稳定 name', function () {
+    mount('<button name="submitApplication">提交当前客户的完整授信申请资料</button>');
+    const result = assertSelector(fixtures.querySelector('button'), 'business_attr:name');
+    assert(result.xpath === "//button[@name='submitApplication']", '长文本不应压过稳定业务属性');
+  });
+
+  test('重复短按钮文字不导出歧义文本 XPath', function () {
+    mount('<div><button>保存</button></div><section><button>保存</button></section>');
+    const result = assertSelector(fixtures.querySelectorAll('button')[1]);
+    assert(result.strategy !== 'button_text', '重复按钮文本不应通过唯一性验证');
+    assert(result.xpath !== "//button[normalize-space(.)='保存']", '不应导出重复按钮文本 XPath');
+  });
+
+  test('重复按钮文本使用 name + 文本组合消歧', function () {
+    mount(
+      '<button name="saveDraft">保存</button>' +
+      '<button name="saveAction" title="保存当前数据">保存</button>'
+    );
+    const result = assertSelector(fixtures.querySelectorAll('button')[1], 'button_attr_text:name');
+    assert(result.xpath === "//button[@name='saveAction'][normalize-space(.)='保存']", `组合 XPath 不符合预期: ${result.xpath}`);
+    assert(result.xpath.length < 140, '组合 XPath 超过长度限制');
+  });
+
+  test('唯一短按钮仍使用最短文本 XPath', function () {
+    mount('<button name="saveAction" title="保存当前数据">保存</button>');
+    const result = assertSelector(fixtures.querySelector('button'), 'button_text');
+    assert(result.xpath === "//button[normalize-space(.)='保存']", '唯一文本不应被更长组合 XPath 覆盖');
+    assert(result.candidates.some(item => item.strategy === 'button_attr_text:name'), '应保留组合候选用于诊断和后续消歧');
+  });
+
+  test('过长按钮属性不生成组合 XPath', function () {
+    const longName = 'saveAction_' + 'x'.repeat(80);
+    mount(`<button name="${longName}">保存</button><button name="otherAction">保存</button>`);
+    const target = fixtures.querySelectorAll('button')[0];
+    const result = assertSelector(target);
+    assert(!result.candidates.some(item => item.strategy === 'button_attr_text:name'), '过长属性不应参与组合');
+    assert(result.xpath.length <= 140 || result.strategy === 'absolute_xpath', '不应导出过长组合 XPath');
+  });
+
+  test('无业务属性的重复按钮可使用 class + 文本组合', function () {
+    mount('<button class="save-draft-button">保存</button><button class="save-final-button">保存</button>');
+    const result = assertSelector(fixtures.querySelectorAll('button')[1], 'button_class_text');
+    assert(result.xpath.indexOf('save-final-button') !== -1, '组合 XPath 未使用稳定 class');
+    assert(result.xpath.indexOf("normalize-space(.)='保存'") !== -1, '组合 XPath 未使用按钮文本');
+    assert(result.xpath.length < 140, 'class + 文本组合 XPath 超过长度限制');
+  });
+
+  test('菜单 li 优先使用自身中文文本', function () {
+    mount(
+      '<ul class="menu-wrapper">' +
+      '<li data-url="/home" class="menu-item">工作台</li>' +
+      '<li data-id="RES100000000" class="menu-item">任务事项</li>' +
+      '<li data-id="RES000000001" class="menu-item">客户管理</li>' +
+      '</ul>'
+    );
+    const target = fixtures.querySelectorAll('li')[1];
+    const result = assertSelector(target, 'menu_item_text');
+    assert(result.xpath === "//li[normalize-space(.)='任务事项']", `菜单 XPath 不符合预期: ${result.xpath}`);
+    assert(result.xpath.indexOf('following-sibling') === -1, '菜单项不应依赖前一兄弟节点');
+    assert(!result.candidates.some(item => item.strategy === 'previous_sibling_text'), '菜单项不应生成兄弟候选');
+  });
+
+  test('菜单顺序变化不影响文本 XPath', function () {
+    mount(
+      '<ul class="menu-wrapper">' +
+      '<li class="menu-item">客户管理</li>' +
+      '<li class="menu-item">工作台</li>' +
+      '<li class="menu-item">任务事项</li>' +
+      '</ul>'
+    );
+    const target = Array.from(fixtures.querySelectorAll('li')).find(item => item.textContent === '任务事项');
+    const result = assertSelector(target, 'menu_item_text');
+    assert(result.xpath === "//li[normalize-space(.)='任务事项']", '菜单排序后 XPath 不应变化');
+  });
+
+  test('重复菜单文本不导出歧义文本 XPath', function () {
+    mount(
+      '<ul class="menu-wrapper"><li class="menu-item">任务事项</li></ul>' +
+      '<ul class="menu-wrapper"><li class="menu-item">任务事项</li></ul>'
+    );
+    const result = assertSelector(fixtures.querySelectorAll('li')[1]);
+    assert(result.strategy !== 'menu_item_text', '重复菜单文本不应被误判为唯一');
+    assert(result.xpath !== "//li[normalize-space(.)='任务事项']", '不应导出重复文本 XPath');
+  });
+
   test('同名弹窗按钮使用标题容器消歧', function () {
     mount(
       '<div class="el-dialog"><div class="el-dialog__title">客户信息</div><button>确定</button></div>' +

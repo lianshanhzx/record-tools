@@ -28,6 +28,21 @@ const MessageHandler = {
 
 let screenshotScrollState = null
 
+const SCREENSHOT_DIALOG_SELECTORS = [
+  '.el-dialog__wrapper', '.el-dialog',
+  '.el-drawer__wrapper', '.el-drawer',
+  '.ant-modal-wrap', '.ant-modal',
+  '.ivu-modal-wrap', '.ivu-modal',
+  '.modal[role="dialog"]', '.modal[aria-modal="true"]', '.modal-dialog',
+  '.drawer', '.dialog', '[role="dialog"]', '[aria-modal="true"]'
+].join(',')
+
+const SCREENSHOT_DIALOG_WRAPPER_SELECTORS = [
+  '.el-dialog__wrapper', '.el-drawer__wrapper',
+  '.ant-modal-wrap', '.ivu-modal-wrap',
+  '.modal[role="dialog"]', '.modal[aria-modal="true"]'
+].join(',')
+
 function getScreenshotDocumentSize() {
   const root = document.documentElement
   const body = document.body
@@ -37,14 +52,63 @@ function getScreenshotDocumentSize() {
   }
 }
 
+function isScreenshotElementVisible(element) {
+  if (!element || !element.isConnected) return false
+  const rect = element.getBoundingClientRect()
+  if (rect.width <= 0 || rect.height <= 0 || rect.right <= 0 || rect.bottom <= 0 ||
+      rect.left >= window.innerWidth || rect.top >= window.innerHeight) return false
+
+  let node = element
+  while (node && node !== document.documentElement) {
+    const style = getComputedStyle(node)
+    if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) === 0) return false
+    node = node.parentElement
+  }
+  return true
+}
+
+function getScreenshotElementZIndex(element) {
+  let zIndex = 0
+  let node = element
+  while (node && node !== document.documentElement) {
+    const value = Number.parseInt(getComputedStyle(node).zIndex, 10)
+    if (Number.isFinite(value)) zIndex = Math.max(zIndex, value)
+    node = node.parentElement
+  }
+  return zIndex
+}
+
+function getTopVisibleScreenshotDialog() {
+  let best = null
+  const seen = new Set()
+  for (const element of document.querySelectorAll(SCREENSHOT_DIALOG_SELECTORS)) {
+    // Frameworks usually expose both a full-screen wrapper and an inner dialog node. Use the
+    // wrapper as the search boundary because it may own the scrollbar itself.
+    const wrapper = element.closest(SCREENSHOT_DIALOG_WRAPPER_SELECTORS)
+    const dialog = wrapper && wrapper.contains(element) ? wrapper : element
+    if (seen.has(dialog) || !isScreenshotElementVisible(dialog)) continue
+    seen.add(dialog)
+    const zIndex = getScreenshotElementZIndex(dialog)
+    // querySelectorAll follows document order, so equal z-index keeps the later (topmost) dialog.
+    if (!best || zIndex >= best.zIndex) best = { element: dialog, zIndex }
+  }
+  return best ? best.element : null
+}
+
 function getScreenshotScrollTarget() {
   const documentScroller = document.scrollingElement || document.documentElement
   const viewportArea = Math.max(1, window.innerWidth * window.innerHeight)
   const documentRange = Math.max(0, documentScroller.scrollHeight - documentScroller.clientHeight)
   const documentTarget = { element: documentScroller, isDocument: true, score: viewportArea }
+  const dialog = getTopVisibleScreenshotDialog()
   let best = null
 
-  const candidates = document.body ? [document.body, ...document.querySelectorAll('body *')] : []
+  // A visible modal owns the screenshot interaction context. Never consider ancestors or the
+  // document behind it, otherwise a non-scrollable dialog would cause the covered page to scroll.
+  const searchRoot = dialog || document.body
+  const candidates = searchRoot
+    ? [searchRoot, ...searchRoot.querySelectorAll('*')]
+    : []
   for (const element of candidates) {
     if (element === documentScroller) continue
     const style = getComputedStyle(element)
@@ -65,12 +129,17 @@ function getScreenshotScrollTarget() {
     if (visibleWidth <= 0 || visibleHeight <= 0) continue
 
     const visibleArea = visibleWidth * visibleHeight
-    if (visibleWidth < window.innerWidth * 0.25 || visibleHeight < window.innerHeight * 0.25 || visibleArea < viewportArea * 0.15) continue
+    if (!dialog && (visibleWidth < window.innerWidth * 0.25 || visibleHeight < window.innerHeight * 0.25 || visibleArea < viewportArea * 0.15)) continue
 
     const score = visibleArea * Math.min(4, element.scrollHeight / Math.max(1, element.clientHeight))
     if (!best || score > best.score) {
       best = { element, isDocument: false, score, visibleArea, scrollRange }
     }
+  }
+  if (dialog) {
+    // No scrollbar inside the active dialog: capture the current viewport once without moving
+    // either the dialog or its covered background document.
+    return best || { element: null, isDocument: false, isViewport: true }
   }
   if (!best) return documentTarget
   if (documentRange <= 2) return best
@@ -82,6 +151,18 @@ function getScreenshotScrollTarget() {
 
 function getScreenshotTargetMetrics() {
   const state = screenshotScrollState
+  if (state && state.isViewport) {
+    return {
+      scrollX: 0,
+      scrollY: 0,
+      documentWidth: window.innerWidth,
+      documentHeight: window.innerHeight,
+      viewportWidth: window.innerWidth,
+      viewportHeight: window.innerHeight,
+      maxScrollY: 0,
+      captureRect: null
+    }
+  }
   if (!state || state.isDocument) {
     const size = getScreenshotDocumentSize()
     return {
@@ -138,15 +219,16 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     screenshotScrollState = {
       element: target.element,
       isDocument: target.isDocument,
-      scrollX: target.isDocument ? window.scrollX : target.element.scrollLeft,
-      scrollY: target.isDocument ? window.scrollY : target.element.scrollTop,
+      isViewport: !!target.isViewport,
+      scrollX: target.isDocument ? window.scrollX : target.isViewport ? 0 : target.element.scrollLeft,
+      scrollY: target.isDocument ? window.scrollY : target.isViewport ? 0 : target.element.scrollTop,
       windowScrollX: window.scrollX,
       windowScrollY: window.scrollY,
       rootScrollBehavior: root.style.scrollBehavior,
-      targetScrollBehavior: target.isDocument ? null : target.element.style.scrollBehavior
+      targetScrollBehavior: target.isDocument || target.isViewport ? null : target.element.style.scrollBehavior
     }
     root.style.scrollBehavior = 'auto'
-    if (!target.isDocument) target.element.style.scrollBehavior = 'auto'
+    if (!target.isDocument && !target.isViewport) target.element.style.scrollBehavior = 'auto'
     const metrics = getScreenshotTargetMetrics()
     sendResponse(Object.assign(metrics, {
       windowWidth: window.innerWidth,
@@ -157,7 +239,9 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
   if (request.type === 'scrollForScreenshot') {
     const state = screenshotScrollState
-    if (state && !state.isDocument) {
+    if (state && state.isViewport) {
+      // The active dialog has no internal scrollbar; keep the current viewport fixed.
+    } else if (state && !state.isDocument) {
       state.element.scrollTo(request.x || 0, request.y || 0)
     } else {
       window.scrollTo(request.x || 0, request.y || 0)
@@ -172,7 +256,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
   if (request.type === 'restoreScrollAfterScreenshot') {
     const state = screenshotScrollState
-    if (state && !state.isDocument) {
+    if (state && !state.isDocument && !state.isViewport) {
       if (state.element.isConnected) state.element.scrollTo(state.scrollX, state.scrollY)
       state.element.style.scrollBehavior = state.targetScrollBehavior || ''
     }

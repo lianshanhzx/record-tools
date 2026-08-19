@@ -109,6 +109,10 @@ const ScreenshotService = {
         }
 
         // ---- 4. 判断是否到达底部，并安排下一次滚动位置 ----
+        if (maxScrollY <= 0) {
+          reachedBottom = true
+          break
+        }
         if (actualY >= maxScrollY) {
           // 已到达底部：连续两次确认才认为真正结束（第二次通常是终态截图）。
           stableBottomChecks++

@@ -22,6 +22,8 @@ const SMART_SELECTOR_VERSION = 2;
 const SMART_SELECTOR_MAX_CANDIDATES = 40;
 // 结构路径候选向上搜索的最大祖先深度，限制生成量并避免路径过长。
 const SMART_SELECTOR_MAX_DEPTH = 10;
+// 多特性组合仅用于消歧；超过该长度时可读性和维护性明显下降，直接放弃。
+const SMART_SELECTOR_MAX_COMBINED_XPATH_LENGTH = 140;
 
 /**
  * 生成 XPath 1.0 安全的字符串字面量。
@@ -398,19 +400,93 @@ class SmartSelector {
   collectTextCandidates() {
     const tagName = this.element.tagName.toLowerCase();
     const role = this.element.getAttribute('role');
-    if (!['button', 'a', 'option', 'label'].includes(tagName) && !['button', 'menuitem', 'tab'].includes(role)) return;
+    const isMenuItem = this.isMenuItemElement(this.element);
+    const isButtonLike = tagName === 'button' || role === 'button';
+    if (!['button', 'a', 'option', 'label'].includes(tagName) &&
+        !['button', 'menuitem', 'tab'].includes(role) && !isMenuItem) return;
     const text = normalizeSelectorText(this.element.innerText || this.element.textContent, 40);
     if (!text) return;
     const penalty = isDynamicText(text) ? 30 : 0;
-    this.addCandidate(`//${tagName}[normalize-space(.)=${quoteXPathValue(text)}]`, 'exact_text', 84 - penalty, {
+    const isShortButtonText = isButtonLike && text.length <= 12;
+    // 短按钮文字（保存、提交、下一步等）通常是跨 DOM 重构更稳定的业务语义，
+    // 分数高于 name/title/class，但仍低于 test 属性和稳定 id。
+    const strategy = isMenuItem ? 'menu_item_text' : (isShortButtonText ? 'button_text' : 'exact_text');
+    const score = isMenuItem ? 90 : (isShortButtonText ? 94 : 84);
+    this.addCandidate(`//${tagName}[normalize-space(.)=${quoteXPathValue(text)}]`, strategy, score - penalty, {
       warnings: penalty ? ['文本具有动态状态特征'] : []
     });
+    if (isShortButtonText && penalty === 0) {
+      this.collectButtonCombinationCandidates(text);
+    }
     if (role) {
       // role + 可访问名称组合比纯文本更精确（文本可能重复，role 进一步收窄）。
-      this.addCandidate(`//*[@role=${quoteXPathValue(role)}][normalize-space(.)=${quoteXPathValue(text)}]`, 'role_and_text', 88 - penalty, {
+      const roleScore = isShortButtonText ? 95 : 88;
+      this.addCandidate(`//*[@role=${quoteXPathValue(role)}][normalize-space(.)=${quoteXPathValue(text)}]`, 'role_and_text', roleScore - penalty, {
         warnings: penalty ? ['文本具有动态状态特征'] : []
       });
     }
+  }
+
+  /**
+   * 为短文本按钮生成受限的“一个稳定特性 + 文本”组合候选。
+   * 组合分数略低于唯一短文本（94），因此文本本身唯一时仍优先输出最短 XPath；
+   * 文本重复时，组合候选可通过 name/aria-label/title/class 消歧并胜过单一普通属性。
+   *
+   * 为控制长度和抗变化能力：
+   *   - 不组合 data-testid/id：它们单独使用已经更稳定且更短；
+   *   - 不组合 type：type="button" 区分度低；
+   *   - 每条 XPath 只增加一个属性或一个 class，不生成三特性排列组合；
+   *   - 属性值最多 40 字符，完整 XPath 最多 140 字符。
+   */
+  collectButtonCombinationCandidates(text) {
+    const tagName = this.element.tagName.toLowerCase();
+    const textPredicate = `[normalize-space(.)=${quoteXPathValue(text)}]`;
+    const attributes = [
+      { name: 'name', score: 93 },
+      { name: 'data-field', score: 93 },
+      { name: 'aria-label', score: 92 },
+      { name: 'title', score: 89 }
+    ];
+
+    for (const attr of attributes) {
+      const value = this.element.getAttribute(attr.name);
+      if (!normalizeSelectorText(value, 40) || value.length > 40 || dynamicValuePenalty(value) >= 80) continue;
+      const xpath = `//${tagName}[@${attr.name}=${quoteXPathValue(value)}]${textPredicate}`;
+      if (xpath.length <= SMART_SELECTOR_MAX_COMBINED_XPATH_LENGTH) {
+        this.addCandidate(xpath, `button_attr_text:${attr.name}`, attr.score);
+      }
+    }
+
+    // class 只取第一个稳定 token，作为无稳定业务属性时的低优先级组合回退。
+    const stableClass = Array.from(this.element.classList || []).find(isStableClassName);
+    if (stableClass) {
+      const xpath = `//${tagName}[${classTokenPredicate(stableClass)}]${textPredicate}`;
+      if (xpath.length <= SMART_SELECTOR_MAX_COMBINED_XPATH_LENGTH) {
+        this.addCandidate(xpath, 'button_class_text', 80);
+      }
+    }
+  }
+
+  /**
+   * 判断元素是否为叶子菜单项。
+   * 仅凭 <li> 标签不足以判定菜单语义，因此要求至少满足一种明确特征：
+   *   role="menuitem"、常见菜单项 class、data-url/data-id，或位于明确的菜单容器中。
+   * 含子级 <li> 的节点通常是菜单分组，不使用聚合文本直接定位。
+   */
+  isMenuItemElement(element) {
+    if (!element || element.tagName.toLowerCase() !== 'li') return false;
+    if (element.querySelector('li')) return false;
+    if (element.getAttribute('role') === 'menuitem') return true;
+    if (element.hasAttribute('data-url') || element.hasAttribute('data-id')) return true;
+
+    const classNames = Array.from(element.classList || []);
+    if (classNames.some(className => [
+      'menu-item', 'el-menu-item', 'ant-menu-item', 'ivu-menu-item', 'nav-item'
+    ].includes(className))) return true;
+
+    return !!element.closest(
+      'ul.menu-wrapper, ul.el-menu, [role="menu"], nav, .sidebar-menu, .nav-menu'
+    );
   }
 
   /**
@@ -446,6 +522,8 @@ class SmartSelector {
    * following-sibling::tag[n] 一致（n 表示该标签中的第几个）。
    */
   collectSiblingCandidates() {
+    // 菜单项是有独立业务名称的集合元素，使用前一项 + following-sibling 会随菜单增删/排序漂移。
+    if (this.isMenuItemElement(this.element)) return;
     const targetTag = this.element.tagName.toLowerCase();
     let sibling = this.element.previousElementSibling;
     let inspected = 0;
