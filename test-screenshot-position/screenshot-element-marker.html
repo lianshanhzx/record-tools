@@ -429,7 +429,7 @@
       function buildIndexes(groups) {
         nodes = groups
         const missingId = nodes.find(node => !node || !node.propertiesID)
-        if (missingId) throw new Error('groups 中存在缺少 propertiesID 的节点')
+        if (missingId) throw new Error('transcationProperties 中存在缺少 propertiesID 的节点')
         nodeById = new Map(nodes.map(node => [String(node.propertiesID), node]))
         childrenByPid = new Map()
         nodes.forEach(node => {
@@ -707,8 +707,8 @@
         jsonLabel.textContent = file.name
         try {
           const payload = JSON.parse(await file.text())
-          if (!payload || !Array.isArray(payload.groups)) throw new Error('JSON 中缺少 groups 数组')
-          buildIndexes(payload.groups)
+          if (!payload || !Array.isArray(payload.transcationProperties)) throw new Error('JSON 中缺少 transcationProperties 数组')
+          buildIndexes(payload.transcationProperties)
           collapsedGroups = new Set()
           clearSelection()
           renderTree()

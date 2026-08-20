@@ -12,6 +12,60 @@
 const UploadService = {
 
   /**
+   * 上传截图文件，接口业务状态 code=200 且 downloadUrl 非空时才视为成功。
+   */
+  uploadScreenshot(blob, filename) {
+    return new Promise((resolve, reject) => {
+      const baseUrl = String(typeof BASEURL === 'undefined' ? '' : BASEURL).trim().replace(/\/+$/, '')
+      if (!baseUrl) {
+        reject(new Error('未配置截图上传服务地址 BASEURL'))
+        return
+      }
+
+      const fileName = String(filename || 'screenshot.png').split('/').pop()
+      const fd = new FormData()
+      fd.append('file', new File([blob], fileName, { type: blob.type || 'image/png' }))
+
+      $.ajax({
+        url: baseUrl + '/api/common/paasfile/uploadTranscationFile',
+        type: 'post',
+        contentType: false,
+        async: true,
+        data: fd,
+        processData: false,
+        success: function (res) {
+          let result = res
+          if (typeof result === 'string') {
+            try {
+              result = JSON.parse(result)
+            } catch (e) {
+              reject(new Error('截图上传接口返回格式错误'))
+              return
+            }
+          }
+          if (!result || Number(result.code) !== 200) {
+            reject(new Error((result && (result.msg || result.message)) || '截图上传失败，接口返回 code=' + (result && result.code)))
+            return
+          }
+          const downloadUrl = String(result.downloadUrl || '').trim()
+          if (!downloadUrl) {
+            reject(new Error('截图上传成功，但接口未返回 downloadUrl'))
+            return
+          }
+          resolve(downloadUrl)
+        },
+        error: function (xhr) {
+          let message = '截图上传请求失败'
+          const response = xhr && xhr.responseJSON
+          if (response && (response.msg || response.message)) message += '：' + (response.msg || response.message)
+          else if (xhr && xhr.status) message += '（HTTP ' + xhr.status + '）'
+          reject(new Error(message))
+        }
+      })
+    })
+  },
+
+  /**
    * 下载当前录制的动作列表为 JSON 文件。
    * 调用位置：popup/index.js → downloadBtn 点击
    */

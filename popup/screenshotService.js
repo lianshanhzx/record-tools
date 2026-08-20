@@ -7,7 +7,7 @@
  *   - background 侧（background/service-worker.js）负责调用 chrome.tabs.captureVisibleTab
  *     抓取当前可视区截图；
  *   - 本模块（popup）负责驱动整个流程：控制滚动步进、节流捕获、把每一屏裁切并拼接成
- *     完整长图，最后通过 chrome.downloads 下载。
+ *     完整长图，上传服务器后再通过 chrome.downloads 下载本地副本。
  *
  * 支持两种滚动场景：
  *   1. 文档自身滚动（普通页面）：页面整体由 window / document 滚动，maxScrollY 由
@@ -24,17 +24,18 @@ const ScreenshotService = {
   isCapturing: false,
   stopRequested: false,
   previewUrls: {},
+  localDownloads: {},
 
   requestStop() {
     if (this.isCapturing) this.stopRequested = true
   },
 
   /**
-   * 执行一次完整的全页截图并下载。
+   * 执行一次完整的全页截图，上传服务器并下载本地副本。
    * @param tab        目标标签页对象（需包含 id、windowId）
    * @param groupNode  触发截图的分组节点，用于生成下载文件名
    * @param onProgress 进度回调 (current, total)
-   * @returns {Promise<Object>} 返回截图路径、尺寸和各元素在图片中的归一化坐标
+   * @returns {Promise<Object>} 返回远程截图地址、尺寸和各元素在图片中的归一化坐标
    */
   async captureFullPage(tab, groupNode, onProgress) {
     if (this.isCapturing) throw new Error('截图任务正在执行')
@@ -158,26 +159,42 @@ const ScreenshotService = {
       }
       if (!reachedBottom) throw new Error('页面过长或持续加载，已达到最大截图屏数')
 
-      // ---- 5. 拼接所有截图并下载 ----
+      // ---- 5. 拼接、上传截图，并按配置目录下载本地副本 ----
       pageInfo.documentHeight = documentHeight
       pageInfo.maxScrollY = maxScrollY
       const stitched = await this.stitch(captures, pageInfo, groupNode.captureItems || [])
       const blob = stitched.blob
       const filename = this.buildFilename(groupNode.propertiesName)
+      onProgress('uploading')
+      const downloadUrl = await UploadService.uploadScreenshot(blob, filename)
       const blobUrl = URL.createObjectURL(blob)
-      const downloadId = await chrome.downloads.download({
-        url: blobUrl,
-        filename,
-        saveAs: false,
-        conflictAction: 'uniquify'
-      })
-      await chrome.runtime.sendMessage({ type: 'trackScreenshotDownload', downloadId })
-      this.previewUrls[filename] = blobUrl
+      let downloadId
+      let localDownloadError = ''
+      try {
+        downloadId = await chrome.downloads.download({
+          url: blobUrl,
+          filename,
+          saveAs: false,
+          conflictAction: 'uniquify'
+        })
+      } catch (error) {
+        localDownloadError = error.message || String(error)
+      }
+      if (downloadId) {
+        try {
+          await chrome.runtime.sendMessage({ type: 'trackScreenshotDownload', downloadId })
+        } catch (e) {
+          // 下载已经完成，跟踪失败不影响本次截图结果。
+        }
+      }
+      this.previewUrls[downloadUrl] = blobUrl
+      if (downloadId) this.localDownloads[downloadUrl] = { downloadId, filename }
       return {
-        path: filename,
+        path: downloadUrl,
         width: stitched.width,
         height: stitched.height,
         positions: stitched.positions,
+        localDownloadError,
         stoppedManually: this.stopRequested
       }
     } finally {
@@ -442,22 +459,20 @@ const ScreenshotService = {
   },
 
   /**
-   * 删除一张截图：同时清理下载记录文件、storage 跟踪以及本地预览 blob URL。
-   * 仅匹配文件全路径结尾一致下载项，避免误删同名文件。
+   * 删除一张截图的本地副本、下载记录和预览 blob URL。
+   * 服务器未提供删除接口，因此这里只移除本地资源。
    */
   async deleteScreenshot(screenshotPath) {
-    const fileName = screenshotPath.split('/').pop()
-    const normalizedPath = screenshotPath.replace(/\\/g, '/').toLowerCase()
-    const downloads = await chrome.downloads.search({ query: [fileName] })
-    for (const item of downloads) {
-      if (!String(item.filename || '').replace(/\\/g, '/').toLowerCase().endsWith(normalizedPath)) continue
-      try { await chrome.downloads.removeFile(item.id) } catch (e) { }
-      try { await chrome.downloads.erase({ id: item.id }) } catch (e) { }
-      await chrome.runtime.sendMessage({ type: 'untrackScreenshotDownload', downloadId: item.id })
+    const localDownload = this.localDownloads[screenshotPath]
+    if (localDownload && localDownload.downloadId) {
+      try { await chrome.downloads.removeFile(localDownload.downloadId) } catch (e) { }
+      try { await chrome.downloads.erase({ id: localDownload.downloadId }) } catch (e) { }
+      await chrome.runtime.sendMessage({ type: 'untrackScreenshotDownload', downloadId: localDownload.downloadId })
     }
     const previewUrl = this.previewUrls[screenshotPath]
     if (previewUrl) URL.revokeObjectURL(previewUrl)
     delete this.previewUrls[screenshotPath]
+    delete this.localDownloads[screenshotPath]
   },
 
   /**

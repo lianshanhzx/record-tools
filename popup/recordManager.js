@@ -1066,14 +1066,17 @@ const RecordManager = {
         groupNode.captureBoundaryItems = boundaryItems.map(item => ({ propertiesID: item.propertiesID, target: item.target }))
         self.setScreenshotCaptureState(groupKey, '停止并生成')
         const screenshot = await ScreenshotService.captureFullPage(tab, groupNode, (current, total) => {
-          self.setScreenshotCaptureState(groupKey, '停止并生成 ' + current + '/' + total)
+          self.setScreenshotCaptureState(groupKey, current === 'uploading' ? '正在上传' : '停止并生成 ' + current + '/' + total)
         })
         const previousPath = self.getGroupScreenshots(groupKey)[0]
+        self.applyScreenshotPositions(captureItems, screenshot.positions)
+        self.addGroupScreenshot(groupKey, screenshot.path)
         if (previousPath && previousPath !== screenshot.path) {
           try { await ScreenshotService.deleteScreenshot(previousPath) } catch (e) {}
         }
-        self.applyScreenshotPositions(captureItems, screenshot.positions)
-        self.addGroupScreenshot(groupKey, screenshot.path)
+        if (screenshot.localDownloadError) {
+          alert('截图上传成功，但本地下载失败：' + screenshot.localDownloadError)
+        }
       } catch (error) {
         alert('截图失败: ' + error.message)
       } finally {
