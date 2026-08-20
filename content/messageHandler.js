@@ -432,7 +432,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     sendResponse({ fields })
     return true
   }
-  // 自动填表：执行 LLM 返回的填表动作，并把成功动作追加到录制列表
+  // 自动填表：执行 LLM 返回的填表动作，并把成功动作追加到录制列表。
+  // 这些动作是自动执行的，不能被 popup 标记为人工录制。
   if (request.type === 'executeActions') {
     // 调用 libs/autoFormFill.js → AutoFormFill.executeActions
     AutoFormFill.executeActions(request.actions).then(results => {
@@ -487,6 +488,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
               pageOrder: pageContext ? pageContext.pageOrder : 0,
               propertiesID: AutoFormFill._uuid(),
               timestamp: Date.now(),
+              manualRecord: false,
               attributes: { value: r.value || '', type: 'ATTRIBUTE' }
             }
           })

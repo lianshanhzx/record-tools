@@ -916,7 +916,9 @@ const PageElementScannerController = (function () {
           const candidates = findSignificantRoots(node, allowActiveAncestor)
           for (const root of candidates) {
             const newlyVisible = updateSignificantRootState(root)
-            if (!suppressPassiveChange && (newlyVisible || (allowActiveAncestor && root.contains(node)))) {
+            // 仅在显著区域实际由隐藏变为可见时扫描。普通保存导致的节点更新
+            // 不应把整块既有区域重新归到最近点击的保存按钮下。
+            if (!suppressPassiveChange && newlyVisible) {
               addRoot(root, true)
             }
           }
@@ -1111,6 +1113,8 @@ const PageElementScannerController = (function () {
    */
   function onClick(event) {
     if (!popupOpen) return
+    // 自动填表和组件内部的合成点击不能作为增量扫描的页面变动锚点。
+    if (!event.isTrusted) return
     const target = event.target
     const uiControl = target.closest?.(
       'button, a[href], [role="button"], [role="link"], [role="tab"], ' +

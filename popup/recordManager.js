@@ -405,9 +405,10 @@ const RecordManager = {
 
   /**
    * 判断记录是否应在列表中显示。
-   * 规则：按钮仅在已被人工录制后显示；其他元素默认显示。
+   * 规则：禁用元素不显示；按钮仅在已被录制后显示；其他元素默认显示。
    */
   isVisibleRecord(item) {
+    if (item.disabled) return false
     if (this.isButtonRecord(item)) {
       return item.recorded === true
     }
@@ -549,6 +550,7 @@ const RecordManager = {
   handleMessage(message) {
     if (message.type !== 'addActionData' && message.type !== 'startRecord' && message.type !== 'addScannedElements') return;
     if (message.type === 'addActionData') {
+      const isManualRecord = message.data.manualRecord === true
       const scanKey = this.getScanKey(message.data)
       if (scanKey) this.deletedScanKeys.delete(scanKey)
       this.ensureRecordKey(message.data)
@@ -580,7 +582,7 @@ const RecordManager = {
           anchorTarget: message.data.anchorTarget || this.recordActionList[byTarget].anchorTarget,
           anchorPropertiesName: message.data.anchorPropertiesName || this.recordActionList[byTarget].anchorPropertiesName,
           recorded: true,
-          manualRecord: true
+          manualRecord: this.recordActionList[byTarget].manualRecord || isManualRecord
         }
       } else {
         // 新记录：同一锚点上下文内已存在同名元素时，按"名称-N"追加后缀去重。
@@ -589,7 +591,7 @@ const RecordManager = {
           if (cnt > 0) message.data.propertiesName = name + '-' + cnt
         }
         message.data.recorded = true
-        message.data.manualRecord = true
+        message.data.manualRecord = isManualRecord
         this.recordActionList.push(message.data)
       }
       this.recordInfoLit = this.sortByScanIndex(this.filterRecordListData(this.recordActionList).filter(r => this.isVisibleRecord(r)))
@@ -638,6 +640,7 @@ const RecordManager = {
             position: existing.screenshotPosition || el.position || existing.position,
             options: el.options && el.options.length > 0
               ? el.options : existing.options,
+            disabled: el.disabled,
             anchorTarget: el.anchorTarget || existing.anchorTarget,
             anchorPropertiesName: el.anchorPropertiesName || existing.anchorPropertiesName,
             recorded: existing.recorded || this.isVisibleRecord(el),

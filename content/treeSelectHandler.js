@@ -28,9 +28,24 @@ const TreeSelectHandler = {
     )
     if (treeSelectRoot) return input
 
-    const controlledId = input.getAttribute('aria-controls') || input.getAttribute('aria-owns')
-    const controlled = controlledId ? document.getElementById(controlledId) : null
-    return controlled?.querySelector('.el-tree, [role="tree"], .ant-tree, .ivu-tree, .t-tree') ? input : null
+    const treeSelector = '.el-tree, [role="tree"], .ant-tree, .ivu-tree, .t-tree'
+    const controlledIds = []
+    let node = input
+    // 部分 Element UI 树选择器将 popover 的关联 ID 放在外层 .el-input，
+    // 而不是实际 input 上（aria-describedby="el-popover-xxxx"）。
+    while (node && node !== document.documentElement) {
+      ;['aria-controls', 'aria-owns', 'aria-describedby'].forEach(attribute => {
+        const value = node.getAttribute?.(attribute) || ''
+        value.split(/\s+/).filter(Boolean).forEach(id => controlledIds.push(id))
+      })
+      if (node.classList?.contains('el-form-item')) break
+      node = node.parentElement
+    }
+    for (const id of controlledIds) {
+      const controlled = document.getElementById(id)
+      if (controlled?.querySelector(treeSelector)) return input
+    }
+    return null
   },
 
   /**
@@ -82,7 +97,9 @@ const TreeSelectHandler = {
    * 调用位置：treeSelectHandler.js → handleTreeNodeClick
    */
   getTreeNodeText(treeNode) {
-    const label = treeNode?.querySelector?.('.el-tree-node__label, .ant-tree-title, .ivu-tree-title, .t-tree__label')
+    const label = treeNode?.querySelector?.(
+      '.el-tree-node__label, .dropdown-tree .node, .ant-tree-title, .ivu-tree-title, .t-tree__label'
+    )
     return (label?.innerText || treeNode?.innerText || '').trim()
   },
 

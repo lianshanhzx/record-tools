@@ -63,6 +63,8 @@ const EventMonitor = {
     this._listening = true
 
     this._changeHandler = event => {
+      // 自动填表派发的 change 事件不属于用户录制操作。
+      if (!event.isTrusted) return
       const { target } = event;
       if (TreeSelectHandler.shouldIgnoreTreeChange(target)) {
         return
@@ -83,6 +85,8 @@ const EventMonitor = {
     }
 
     this._clickHandler = event => {
+      // 自动填表及组件内部派发的 click 事件不应被记录为人工操作。
+      if (!event.isTrusted) return
       const { target } = event;
       TreeSelectHandler.clearExpiredTreeSelect()
 
