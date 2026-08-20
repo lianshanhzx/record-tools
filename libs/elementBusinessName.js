@@ -66,7 +66,7 @@ function getWrappingLabel(element, appendButtonName = true) {
     if (appendButtonName && formItemLabelText && _isButtonElement(element)) {
       var btnName = _getButtonOwnName(element)
       if (btnName) {
-        return formItemLabelText + ' ' + btnName
+        return formItemLabelText + '_' + btnName
       }
     }
     return formItemLabelText

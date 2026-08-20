@@ -883,7 +883,6 @@ const RecordManager = {
         regionLabel: '',
         rect: item.screenshotPosition || item.rect || item.scanPosition || item.position || {},
         positionStatus: item.positionStatus || (item.screenshotPosition ? 'captured' : 'not-captured'),
-        params: { label_text: item.propertiesName || '', objectValue: item.objectValue || '' },
         attr: attr
       }
     }

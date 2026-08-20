@@ -45,7 +45,7 @@
   testResults.push(run('真实标签不拼接按钮文本', function () {
     fixtures.innerHTML = '<div class="el-form-item"><label>客户管理</label><div><button>新增</button></div></div>'
     const button = fixtures.querySelector('button')
-    assert(getChineseLabelByElement(button) === '客户管理 新增', '业务名称未保留识别拼接')
+    assert(getChineseLabelByElement(button) === '客户管理_新增', '业务名称未使用下划线拼接')
     assert(getRealLabelByElement(button) === '客户管理', '真实标签错误拼接了按钮文本')
   }))
 

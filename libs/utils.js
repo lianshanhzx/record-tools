@@ -61,7 +61,7 @@ function getEventTypeName(value) {
 function actionTree2Json(groups, url) {
   return JSON.stringify({
     id: uuid(), name: 'test', url,
-    groups: groups || []
+    transcationProperties: groups || []
   })
 }
 
