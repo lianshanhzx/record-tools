@@ -1,0 +1,739 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>截图元素标记测试</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #172033;
+      --muted: #667085;
+      --line: #d6dce6;
+      --soft: #f5f7fa;
+      --blue: #155eef;
+      --red: #e11919;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: #e9edf3;
+      color: var(--ink);
+      font-family: Arial, "Microsoft YaHei", sans-serif;
+    }
+
+    button, input { font: inherit; }
+
+    .app {
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .topbar {
+      position: sticky;
+      top: 0;
+      z-index: 10;
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 10px;
+      padding: 12px 18px;
+      border-bottom: 1px solid var(--line);
+      background: #fff;
+      box-shadow: 0 2px 10px rgba(16, 24, 40, 0.08);
+    }
+
+    .title-block {
+      min-width: 210px;
+      margin-right: auto;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 18px;
+    }
+
+    .subtitle {
+      margin-top: 3px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .file-control {
+      position: relative;
+      overflow: hidden;
+      display: inline-flex;
+      align-items: center;
+      min-height: 36px;
+      padding: 7px 12px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: #fff;
+      cursor: pointer;
+    }
+
+    .file-control:hover { background: var(--soft); }
+    .file-control input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+
+    .file-label {
+      max-width: 220px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .btn {
+      min-height: 36px;
+      padding: 7px 14px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: #fff;
+      color: var(--ink);
+      cursor: pointer;
+    }
+
+    .btn:hover { background: var(--soft); }
+    .btn:disabled { opacity: 0.45; cursor: not-allowed; }
+
+    .btn-primary {
+      border-color: var(--blue);
+      background: var(--blue);
+      color: #fff;
+      font-weight: 700;
+    }
+
+    .btn-primary:hover { background: #004eeb; }
+
+    .status {
+      flex-basis: 100%;
+      min-height: 18px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .status.error { color: #b42318; }
+    .status.success { color: #067647; }
+
+    .content {
+      flex: 1;
+      min-height: 0;
+      display: grid;
+      grid-template-columns: minmax(300px, 380px) minmax(0, 1fr);
+      gap: 14px;
+      padding: 14px;
+    }
+
+    .panel {
+      min-height: 0;
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      box-shadow: 0 5px 18px rgba(16, 24, 40, 0.08);
+    }
+
+    .panel-head {
+      min-height: 48px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 10px 14px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .panel-title { font-size: 14px; font-weight: 700; }
+    .panel-meta { color: var(--muted); font-size: 12px; }
+
+    .tree {
+      height: calc(100vh - 132px);
+      min-height: 420px;
+      overflow: auto;
+      padding: 8px 0 20px;
+    }
+
+    .empty {
+      padding: 40px 20px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.7;
+      text-align: center;
+    }
+
+    .group-row {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      min-height: 34px;
+      padding: 5px 12px;
+      border-bottom: 1px solid #f0f2f5;
+      background: #f7f9fc;
+      cursor: pointer;
+      user-select: none;
+    }
+
+    .group-row:hover { background: #eef3fb; }
+    .group-row.active { background: #e8f0ff; }
+
+    .arrow {
+      width: 12px;
+      flex: 0 0 12px;
+      color: #667085;
+      font-size: 10px;
+      text-align: center;
+    }
+
+    .group-type {
+      flex: 0 0 auto;
+      padding: 1px 5px;
+      border-radius: 4px;
+      background: #e5e9f0;
+      color: #475467;
+      font-size: 10px;
+    }
+
+    .group-name {
+      min-width: 0;
+      flex: 1;
+      overflow: hidden;
+      font-size: 13px;
+      font-weight: 700;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .element-row {
+      display: grid;
+      grid-template-columns: 20px 58px minmax(0, 1fr);
+      gap: 7px;
+      align-items: center;
+      min-height: 34px;
+      padding: 5px 12px;
+      border-bottom: 1px solid #f0f2f5;
+      cursor: pointer;
+    }
+
+    .element-row:hover { background: #f8faff; }
+    .element-row.selected { background: #fff1f1; }
+    .element-row.unavailable { opacity: 0.5; cursor: not-allowed; }
+
+    .element-type {
+      overflow: hidden;
+      color: #475467;
+      font-family: Consolas, monospace;
+      font-size: 11px;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .element-name {
+      overflow: hidden;
+      font-size: 12px;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .canvas-panel {
+      display: flex;
+      flex-direction: column;
+    }
+
+    .canvas-shell {
+      flex: 1;
+      min-height: 420px;
+      display: flex;
+      align-items: flex-start;
+      justify-content: center;
+      padding: 16px;
+      overflow: auto;
+      background-color: #cfd6df;
+      background-image:
+        linear-gradient(45deg, #c3cad3 25%, transparent 25%),
+        linear-gradient(-45deg, #c3cad3 25%, transparent 25%),
+        linear-gradient(45deg, transparent 75%, #c3cad3 75%),
+        linear-gradient(-45deg, transparent 75%, #c3cad3 75%);
+      background-position: 0 0, 0 8px, 8px -8px, -8px 0;
+      background-size: 16px 16px;
+    }
+
+    canvas {
+      display: block;
+      max-width: 100%;
+      height: auto;
+      background: #fff;
+      box-shadow: 0 8px 28px rgba(16, 24, 40, 0.25);
+    }
+
+    .placeholder {
+      align-self: center;
+      max-width: 480px;
+      padding: 30px;
+      border: 1px dashed #98a2b3;
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.85);
+      color: var(--muted);
+      line-height: 1.8;
+      text-align: center;
+    }
+
+    @media (max-width: 900px) {
+      .content { grid-template-columns: 1fr; }
+      .tree { height: 360px; min-height: 0; }
+      .canvas-shell { min-height: 60vh; padding: 8px; }
+    }
+  </style>
+</head>
+<body>
+  <main class="app">
+    <header class="topbar">
+      <div class="title-block">
+        <h1>截图元素标记测试</h1>
+        <div class="subtitle">同一时间只能勾选同一个直接分组内的多个元素</div>
+      </div>
+
+      <label class="file-control">
+        <span class="file-label" id="jsonLabel">上传 JSON</span>
+        <input id="jsonFile" type="file" accept="application/json,.json">
+      </label>
+
+      <label class="file-control">
+        <span class="file-label" id="imageLabel">选择截图（可选）</span>
+        <input id="imageFile" type="file" accept="image/*">
+      </label>
+
+      <button class="btn btn-primary" id="highlightBtn" type="button" disabled>点亮标记</button>
+      <button class="btn" id="clearMarksBtn" type="button" disabled>清除标记</button>
+      <button class="btn" id="clearSelectionBtn" type="button" disabled>清空勾选</button>
+      <div class="status" id="status" aria-live="polite">等待上传 JSON。</div>
+    </header>
+
+    <section class="content">
+      <aside class="panel">
+        <div class="panel-head">
+          <span class="panel-title">分组与元素</span>
+          <span class="panel-meta" id="treeMeta">0 个分组，0 个元素</span>
+        </div>
+        <div class="tree" id="tree">
+          <div class="empty">上传 JSON 后显示分组树和元素。</div>
+        </div>
+      </aside>
+
+      <section class="panel canvas-panel">
+        <div class="panel-head">
+          <span class="panel-title" id="canvasTitle">截图画布</span>
+          <span class="panel-meta" id="canvasMeta">未加载图片</span>
+        </div>
+        <div class="canvas-shell">
+          <div class="placeholder" id="placeholder">勾选左侧元素后，页面会自动加载其直接分组的 screenshots 图片。</div>
+          <canvas id="canvas" hidden></canvas>
+        </div>
+      </section>
+    </section>
+  </main>
+
+  <script>
+    (function () {
+      'use strict'
+
+      const GROUP_TYPE_LABELS = {
+        page: '主页',
+        dialog: '弹窗',
+        tab: '页签',
+        collapse: '折叠'
+      }
+
+      const jsonFile = document.getElementById('jsonFile')
+      const imageFile = document.getElementById('imageFile')
+      const jsonLabel = document.getElementById('jsonLabel')
+      const imageLabel = document.getElementById('imageLabel')
+      const highlightBtn = document.getElementById('highlightBtn')
+      const clearMarksBtn = document.getElementById('clearMarksBtn')
+      const clearSelectionBtn = document.getElementById('clearSelectionBtn')
+      const status = document.getElementById('status')
+      const tree = document.getElementById('tree')
+      const treeMeta = document.getElementById('treeMeta')
+      const canvasTitle = document.getElementById('canvasTitle')
+      const canvasMeta = document.getElementById('canvasMeta')
+      const placeholder = document.getElementById('placeholder')
+      const canvas = document.getElementById('canvas')
+      const context = canvas.getContext('2d')
+
+      let nodes = []
+      let nodeById = new Map()
+      let childrenByPid = new Map()
+      let collapsedGroups = new Set()
+      let selectedGroupId = ''
+      let selectedElementIds = new Set()
+      let loadedImage = null
+      let loadedImageGroupId = ''
+      let imageObjectUrl = ''
+      let imageLoadVersion = 0
+      let marksVisible = false
+
+      function setStatus(message, type) {
+        status.textContent = message
+        status.className = 'status' + (type ? ' ' + type : '')
+      }
+
+      function escapeHtml(value) {
+        return String(value == null ? '' : value)
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;')
+          .replace(/'/g, '&#39;')
+      }
+
+      function isElement(node) {
+        return node && node.type === 'ele'
+      }
+
+      function isGroup(node) {
+        return node && !isElement(node)
+      }
+
+      function hasPosition(node) {
+        const position = node && node.position
+        return !!position && position.coordinateType === 'normalized' &&
+          [position.x, position.y, position.width, position.height].every(Number.isFinite) &&
+          position.width > 0 && position.height > 0
+      }
+
+      function getElementType(node) {
+        return node.command || node.action || node.attr && node.attr.type || 'ele'
+      }
+
+      function getElementName(node) {
+        return node.params && node.params.label_text || node.propertiesName || node.name || '未命名元素'
+      }
+
+      function buildIndexes(groups) {
+        nodes = groups
+        nodeById = new Map(nodes.map(node => [String(node.id), node]))
+        childrenByPid = new Map()
+        nodes.forEach(node => {
+          const pid = node.pid == null ? '' : String(node.pid)
+          if (!childrenByPid.has(pid)) childrenByPid.set(pid, [])
+          childrenByPid.get(pid).push(node)
+        })
+      }
+
+      function getChildren(groupId) {
+        return childrenByPid.get(String(groupId)) || []
+      }
+
+      function getDirectElements(groupId) {
+        return getChildren(groupId).filter(isElement)
+      }
+
+      function getRootGroups() {
+        const roots = nodes.filter(node => isGroup(node) && (node.pid == null || !nodeById.has(String(node.pid))))
+        return roots.length > 0 ? roots : nodes.filter(node => isGroup(node))
+      }
+
+      function getScreenshotCandidates(screenshotPath) {
+        const value = String(screenshotPath || '').trim().replace(/\\/g, '/')
+        if (!value) return []
+        if (/^(https?:|data:|blob:|file:)/i.test(value)) return [value]
+
+        const candidates = []
+        const index = value.toLowerCase().lastIndexOf('/screenshots/')
+        const relative = index >= 0
+          ? value.slice(index + 1)
+          : value.toLowerCase().startsWith('screenshots/') ? value : ''
+        if (relative) candidates.push(new URL('../' + relative, window.location.href).href)
+        candidates.push(new URL('../' + value.replace(/^\/+/, ''), window.location.href).href)
+        candidates.push(new URL(value, window.location.href).href)
+        return Array.from(new Set(candidates))
+      }
+
+      function renderTree() {
+        if (nodes.length === 0) {
+          tree.innerHTML = '<div class="empty">上传 JSON 后显示分组树和元素。</div>'
+          treeMeta.textContent = '0 个分组，0 个元素'
+          return
+        }
+
+        let html = ''
+        let groupCount = 0
+        let elementCount = 0
+        const rendered = new Set()
+
+        function renderGroup(group, depth) {
+          const id = String(group.id)
+          if (rendered.has(id)) return
+          rendered.add(id)
+          groupCount++
+          const children = getChildren(id)
+          const elements = children.filter(isElement)
+          const childGroups = children.filter(isGroup)
+          elementCount += elements.length
+          const collapsed = collapsedGroups.has(id)
+          const active = selectedGroupId === id
+          const type = GROUP_TYPE_LABELS[group.type] || group.type || '分组'
+
+          html += '<div class="group-row' + (active ? ' active' : '') + '" data-group-id="' + escapeHtml(id) + '" style="padding-left:' + (12 + depth * 16) + 'px">'
+          html += '<span class="arrow">' + (children.length > 0 ? (collapsed ? '▶' : '▼') : '') + '</span>'
+          html += '<span class="group-type">' + escapeHtml(type) + '</span>'
+          html += '<span class="group-name" title="' + escapeHtml(group.name || '未命名分组') + '">' + escapeHtml(group.name || '未命名分组') + '</span>'
+          html += '</div>'
+
+          if (collapsed) return
+
+          elements.forEach(element => {
+            const elementId = String(element.id)
+            const available = hasPosition(element)
+            const selected = selectedElementIds.has(elementId)
+            html += '<label class="element-row' + (selected ? ' selected' : '') + (available ? '' : ' unavailable') + '" style="padding-left:' + (32 + depth * 16) + 'px">'
+            html += '<input class="element-check" type="checkbox" data-group-id="' + escapeHtml(id) + '" data-element-id="' + escapeHtml(elementId) + '"' + (selected ? ' checked' : '') + (available ? '' : ' disabled') + '>'
+            html += '<span class="element-type" title="' + escapeHtml(getElementType(element)) + '">' + escapeHtml(getElementType(element)) + '</span>'
+            html += '<span class="element-name" title="' + escapeHtml(getElementName(element)) + '">' + escapeHtml(getElementName(element)) + '</span>'
+            html += '</label>'
+          })
+
+          childGroups.forEach(child => renderGroup(child, depth + 1))
+        }
+
+        getRootGroups().forEach(group => renderGroup(group, 0))
+        nodes.filter(isGroup).forEach(group => renderGroup(group, 0))
+        tree.innerHTML = html
+        treeMeta.textContent = groupCount + ' 个分组，' + elementCount + ' 个元素'
+
+        tree.querySelectorAll('.group-row').forEach(row => {
+          row.addEventListener('click', function () {
+            const groupId = row.dataset.groupId
+            if (collapsedGroups.has(groupId)) collapsedGroups.delete(groupId)
+            else collapsedGroups.add(groupId)
+            renderTree()
+          })
+        })
+
+        tree.querySelectorAll('.element-check').forEach(check => {
+          check.addEventListener('change', function () {
+            changeElementSelection(check.dataset.groupId, check.dataset.elementId, check.checked)
+          })
+        })
+      }
+
+      function changeElementSelection(groupId, elementId, checked) {
+        // 切换到另一分组时清空旧选择，保证只能多选同一直接分组的元素。
+        if (checked && selectedGroupId && selectedGroupId !== groupId) {
+          selectedElementIds.clear()
+          marksVisible = false
+        }
+
+        if (checked) {
+          selectedGroupId = groupId
+          selectedElementIds.add(elementId)
+        } else {
+          selectedElementIds.delete(elementId)
+          if (selectedElementIds.size === 0) selectedGroupId = ''
+        }
+
+        marksVisible = false
+        renderTree()
+        updateButtons()
+        drawCanvas()
+        if (checked) loadGroupImage(groupId)
+      }
+
+      function clearSelection() {
+        selectedGroupId = ''
+        selectedElementIds.clear()
+        marksVisible = false
+        renderTree()
+        updateButtons()
+        drawCanvas()
+      }
+
+      function showPlaceholder(message) {
+        loadedImage = null
+        loadedImageGroupId = ''
+        canvas.hidden = true
+        placeholder.hidden = false
+        placeholder.innerHTML = escapeHtml(message).replace(/\n/g, '<br>')
+        canvasMeta.textContent = '未加载图片'
+        updateButtons()
+      }
+
+      function applyImage(image, groupId, label) {
+        loadedImage = image
+        loadedImageGroupId = groupId
+        canvas.width = image.naturalWidth
+        canvas.height = image.naturalHeight
+        canvas.hidden = false
+        placeholder.hidden = true
+        canvasMeta.textContent = image.naturalWidth + ' x ' + image.naturalHeight + ' px'
+        canvasTitle.textContent = '截图画布 - ' + label
+        marksVisible = false
+        drawCanvas()
+        updateButtons()
+      }
+
+      function loadCandidates(candidates, groupId, label) {
+        const version = ++imageLoadVersion
+        let index = 0
+
+        function next() {
+          if (version !== imageLoadVersion) return
+          if (index >= candidates.length) {
+            showPlaceholder('无法加载该分组的 screenshots 图片。\n请确认本地 screenshots 路径，或在顶部手动选择截图。')
+            setStatus('自动加载截图失败，可手动选择截图。', 'error')
+            return
+          }
+          const image = new Image()
+          image.onload = function () {
+            if (version !== imageLoadVersion) return
+            applyImage(image, groupId, label)
+            setStatus('已加载所选元素所属分组的截图。', 'success')
+          }
+          image.onerror = next
+          image.src = candidates[index++]
+        }
+
+        next()
+      }
+
+      function loadGroupImage(groupId) {
+        if (loadedImage && loadedImageGroupId === groupId) return
+        if (imageObjectUrl) {
+          URL.revokeObjectURL(imageObjectUrl)
+          imageObjectUrl = ''
+        }
+        const group = nodeById.get(String(groupId))
+        const screenshot = group && Array.isArray(group.screenshots) ? group.screenshots[0] : ''
+        if (!screenshot) {
+          imageLoadVersion++
+          showPlaceholder('当前分组没有 screenshots 图片地址。\n可以在顶部手动选择截图。')
+          setStatus('当前分组没有截图地址。', 'error')
+          return
+        }
+        loadCandidates(getScreenshotCandidates(screenshot), String(groupId), group.name || group.type || '分组')
+      }
+
+      function drawCanvas() {
+        if (!loadedImage) return
+        context.clearRect(0, 0, canvas.width, canvas.height)
+        context.drawImage(loadedImage, 0, 0, canvas.width, canvas.height)
+        if (!marksVisible || loadedImageGroupId !== selectedGroupId) return
+
+        const selected = getDirectElements(selectedGroupId).filter(element => selectedElementIds.has(String(element.id)) && hasPosition(element))
+        const lineWidth = Math.max(3, Math.round(Math.min(canvas.width, canvas.height) / 500))
+        const badgeSize = Math.max(20, lineWidth * 7)
+        context.save()
+        context.strokeStyle = '#e11919'
+        context.fillStyle = 'rgba(225, 25, 25, 0.12)'
+        context.lineWidth = lineWidth
+        context.font = Math.max(14, lineWidth * 5) + 'px Arial'
+
+        selected.forEach((element, index) => {
+          const position = element.position
+          const x = position.x * canvas.width
+          const y = position.y * canvas.height
+          const width = position.width * canvas.width
+          const height = position.height * canvas.height
+          const inset = lineWidth / 2
+          context.fillRect(x, y, width, height)
+          context.strokeRect(x + inset, y + inset, Math.max(0, width - lineWidth), Math.max(0, height - lineWidth))
+
+          const badgeX = Math.max(0, x - badgeSize / 2)
+          const badgeY = Math.max(0, y - badgeSize / 2)
+          context.fillStyle = '#e11919'
+          context.fillRect(badgeX, badgeY, badgeSize, badgeSize)
+          context.fillStyle = '#fff'
+          context.textAlign = 'center'
+          context.textBaseline = 'middle'
+          context.fillText(String(index + 1), badgeX + badgeSize / 2, badgeY + badgeSize / 2)
+          context.fillStyle = 'rgba(225, 25, 25, 0.12)'
+        })
+        context.restore()
+      }
+
+      function updateButtons() {
+        const hasSelection = selectedElementIds.size > 0
+        const correctImage = !!loadedImage && loadedImageGroupId === selectedGroupId
+        highlightBtn.disabled = !hasSelection || !correctImage
+        clearSelectionBtn.disabled = !hasSelection
+        clearMarksBtn.disabled = !marksVisible
+      }
+
+      jsonFile.addEventListener('change', async function () {
+        const file = jsonFile.files && jsonFile.files[0]
+        if (!file) return
+        jsonLabel.textContent = file.name
+        try {
+          const payload = JSON.parse(await file.text())
+          if (!payload || !Array.isArray(payload.groups)) throw new Error('JSON 中缺少 groups 数组')
+          buildIndexes(payload.groups)
+          collapsedGroups = new Set()
+          clearSelection()
+          renderTree()
+          showPlaceholder('勾选左侧元素后，页面会自动加载其直接分组的 screenshots 图片。')
+          setStatus('JSON 加载成功。请选择树中的元素。', 'success')
+        } catch (error) {
+          nodes = []
+          nodeById = new Map()
+          childrenByPid = new Map()
+          clearSelection()
+          renderTree()
+          showPlaceholder('JSON 读取失败。')
+          setStatus('JSON 加载失败：' + error.message, 'error')
+        }
+      })
+
+      imageFile.addEventListener('change', function () {
+        const file = imageFile.files && imageFile.files[0]
+        if (!file) return
+        if (!selectedGroupId) {
+          imageFile.value = ''
+          setStatus('请先勾选一个分组中的元素，再选择对应截图。', 'error')
+          return
+        }
+        imageLabel.textContent = file.name
+        imageLoadVersion++
+        const groupId = selectedGroupId
+        if (imageObjectUrl) URL.revokeObjectURL(imageObjectUrl)
+        imageObjectUrl = URL.createObjectURL(file)
+        const image = new Image()
+        image.onload = function () {
+          const group = nodeById.get(groupId)
+          applyImage(image, groupId, group && (group.name || group.type) || '手动截图')
+          setStatus('已加载手动选择的截图。', 'success')
+        }
+        image.onerror = function () {
+          showPlaceholder('手动截图加载失败。')
+          setStatus('手动截图加载失败。', 'error')
+        }
+        image.src = imageObjectUrl
+      })
+
+      highlightBtn.addEventListener('click', function () {
+        marksVisible = true
+        drawCanvas()
+        clearMarksBtn.disabled = false
+        setStatus('已点亮 ' + selectedElementIds.size + ' 个元素。', 'success')
+      })
+
+      clearMarksBtn.addEventListener('click', function () {
+        marksVisible = false
+        drawCanvas()
+        updateButtons()
+        setStatus('已清除画布标记，元素勾选状态保留。')
+      })
+
+      clearSelectionBtn.addEventListener('click', function () {
+        clearSelection()
+        setStatus('已清空元素勾选。')
+      })
+
+      window.addEventListener('beforeunload', function () {
+        if (imageObjectUrl) URL.revokeObjectURL(imageObjectUrl)
+      })
+    })()
+  </script>
+</body>
+</html>
