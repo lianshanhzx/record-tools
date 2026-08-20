@@ -22,22 +22,37 @@
  */
 const ScreenshotService = {
   isCapturing: false,
+  stopRequested: false,
   previewUrls: {},
+
+  requestStop() {
+    if (this.isCapturing) this.stopRequested = true
+  },
 
   /**
    * 执行一次完整的全页截图并下载。
    * @param tab        目标标签页对象（需包含 id、windowId）
    * @param groupNode  触发截图的分组节点，用于生成下载文件名
    * @param onProgress 进度回调 (current, total)
-   * @returns {Promise<string>} 通过 chrome.downloads 下载后返回截图文件名
+   * @returns {Promise<Object>} 返回截图路径、尺寸和各元素在图片中的归一化坐标
    */
   async captureFullPage(tab, groupNode, onProgress) {
     if (this.isCapturing) throw new Error('截图任务正在执行')
     this.isCapturing = true
+    this.stopRequested = false
     let pageInfo = null
     try {
       // ---- 1. 让 content 侧准备截图：识别滚动目标、保存原始滚动位置、返回页面指标 ----
-      pageInfo = await sendToContent(tab.id, { type: 'prepareFullPageScreenshot' })
+      pageInfo = await sendToContent(tab.id, {
+        type: 'prepareFullPageScreenshot',
+        groupContext: {
+          key: groupNode.key,
+          type: groupNode.type,
+          path: groupNode.path || [],
+          items: groupNode.captureItems || [],
+          boundaryItems: groupNode.captureBoundaryItems || groupNode.captureItems || []
+        }
+      })
       // viewportWidth / viewportHeight 是实际滚动容器的可视区尺寸，两端数据必须齐全。
       if (!pageInfo || !pageInfo.viewportWidth || !pageInfo.viewportHeight) {
         throw new Error('无法读取页面尺寸：内容脚本未响应。请刷新目标网页后重试')
@@ -47,9 +62,7 @@ const ScreenshotService = {
       // 内部滚动容器场景下，最后成图的逻辑高度 = 窗口高度 + 容器可滚动距离
       // （外壳保持不变，仅滚动内容纵向延展）；文档滚动时直接用文档高度。
       const estimatedWidth = Math.ceil((pageInfo.windowWidth || pageInfo.viewportWidth) * pageInfo.devicePixelRatio)
-      const logicalHeight = pageInfo.captureRect
-        ? (pageInfo.windowHeight || pageInfo.viewportHeight) + pageInfo.maxScrollY
-        : pageInfo.documentHeight
+      const logicalHeight = (pageInfo.captureRect ? (pageInfo.windowHeight || pageInfo.viewportHeight) : pageInfo.viewportHeight) + pageInfo.maxScrollY
       const estimatedHeight = Math.ceil(logicalHeight * pageInfo.devicePixelRatio)
       if (estimatedWidth * estimatedHeight > screenshotMaxPixels) {
         throw new Error('页面过长，截图像素超过 ' + Math.floor(screenshotMaxPixels / 1000000) + ' 百万限制')
@@ -57,7 +70,9 @@ const ScreenshotService = {
 
       const captures = []
       let requestedY = 0 // 下一次要滚动到的目标位置（逻辑像素，容器坐标）
-      let documentHeight = pageInfo.documentHeight
+      let documentHeight = pageInfo.captureRect
+        ? pageInfo.documentHeight
+        : pageInfo.viewportHeight + pageInfo.maxScrollY
       // maxScrollY 为滚动目标的最大可滚动距离，同时作为“是否已到达底部”的终止条件。
       // 注意：content 每次滚动后都会回报最新的 maxScrollY（允许缩小），
       // 避免内容懒加载/折叠后 scrollHeight 变小导致永远触碰不到旧最大值。
@@ -85,7 +100,9 @@ const ScreenshotService = {
           throw new Error('页面滚动失败：内容脚本未响应')
         }
         // 以每次回报的最新文档高度 / 最大滚动距离为准。
-        documentHeight = Math.max(documentHeight, scrollState.documentHeight || 0)
+        documentHeight = pageInfo.captureRect
+          ? Math.max(documentHeight, scrollState.documentHeight || 0)
+          : pageInfo.viewportHeight + (typeof scrollState.maxScrollY === 'number' ? scrollState.maxScrollY : maxScrollY)
         if (typeof scrollState.maxScrollY === 'number') maxScrollY = scrollState.maxScrollY
 
         // Chrome 对 captureVisibleTab 有每秒调用次数限制，逐屏捕获之间主动节流，
@@ -105,10 +122,20 @@ const ScreenshotService = {
         const actualY = scrollState.scrollY
         // 记录实际滚动位置（而非请求位置），同一位置的截图去重，避免拼接重复屏。
         if (!captures.some(capture => capture.y === actualY)) {
-          captures.push({ y: actualY, image, captureRect: scrollState.captureRect })
+          captures.push({
+            y: actualY,
+            image,
+            captureRect: scrollState.captureRect,
+            elementRects: scrollState.elementRects || []
+          })
         }
 
         // ---- 4. 判断是否到达底部，并安排下一次滚动位置 ----
+        if (this.stopRequested) {
+          maxScrollY = actualY
+          reachedBottom = true
+          break
+        }
         if (maxScrollY <= 0) {
           reachedBottom = true
           break
@@ -134,7 +161,8 @@ const ScreenshotService = {
       // ---- 5. 拼接所有截图并下载 ----
       pageInfo.documentHeight = documentHeight
       pageInfo.maxScrollY = maxScrollY
-      const blob = await this.stitch(captures, pageInfo)
+      const stitched = await this.stitch(captures, pageInfo, groupNode.captureItems || [])
+      const blob = stitched.blob
       const filename = this.buildFilename(groupNode.name)
       const blobUrl = URL.createObjectURL(blob)
       const downloadId = await chrome.downloads.download({
@@ -145,7 +173,13 @@ const ScreenshotService = {
       })
       await chrome.runtime.sendMessage({ type: 'trackScreenshotDownload', downloadId })
       this.previewUrls[filename] = blobUrl
-      return filename
+      return {
+        path: filename,
+        width: stitched.width,
+        height: stitched.height,
+        positions: stitched.positions,
+        stoppedManually: this.stopRequested
+      }
     } finally {
       // ---- 6. 无论成功失败，都恢复页面原始滚动位置与 scrollBehavior ----
       if (pageInfo) {
@@ -158,6 +192,7 @@ const ScreenshotService = {
         }
       }
       this.isCapturing = false
+      this.stopRequested = false
     }
   },
 
@@ -189,7 +224,7 @@ const ScreenshotService = {
    *   - 内部滚动容器：横向保持全屏宽，高度 = 首屏自然高 + 滚动距离 × scale，
    *     页头/侧边保留，滚动内容插入，页脚（首屏中容器下方的区域）移到图片末尾。
    */
-  async stitch(captures, pageInfo) {
+  async stitch(captures, pageInfo, captureItems) {
     const captureRect = pageInfo.captureRect
     // 设备像素与逻辑像素的换算比例：以首屏自然宽除以窗口宽得到。
     const scale = captures[0].image.naturalWidth / (pageInfo.windowWidth || pageInfo.viewportWidth)
@@ -205,6 +240,47 @@ const ScreenshotService = {
     canvas.width = width
     canvas.height = height
     const context = canvas.getContext('2d')
+    const itemStatuses = new Map()
+    ;(captureItems || []).forEach(item => itemStatuses.set(item.id, 'target-not-found'))
+    const elementBoxes = new Map()
+
+    function rememberStatus(elementInfo) {
+      if (!elementInfo || !elementInfo.id) return
+      const current = itemStatuses.get(elementInfo.id)
+      if (elementInfo.status === 'visible' || current === 'target-not-found') {
+        itemStatuses.set(elementInfo.id, elementInfo.status || current)
+      }
+    }
+
+    function rememberBox(capture, currentRect, sourceX, sourceY, sourceOffsetY, sourceWidth,
+      sourceHeight, destinationX, outputY) {
+      const sourceTop = sourceY + sourceOffsetY
+      const sourceBottom = sourceTop + sourceHeight
+      const sourceRight = sourceX + sourceWidth
+      ;(capture.elementRects || []).forEach(elementInfo => {
+        rememberStatus(elementInfo)
+        const rect = elementInfo.rect
+        if (!rect || elementBoxes.has(elementInfo.id)) return
+        const elementLeft = rect.left * scale
+        const elementTop = rect.top * scale
+        const elementRight = rect.right * scale
+        const elementBottom = rect.bottom * scale
+        if (elementRight <= sourceX || elementLeft >= sourceRight ||
+            elementBottom <= sourceTop || elementTop >= sourceBottom) return
+        const logicalLeft = currentRect
+          ? (captureRect.left + rect.left - currentRect.left) * scale
+          : elementLeft
+        const logicalTop = currentRect
+          ? (captureRect.top + capture.y + rect.top - currentRect.top) * scale
+          : (capture.y + rect.top) * scale
+        elementBoxes.set(elementInfo.id, {
+          left: logicalLeft,
+          top: logicalTop,
+          width: rect.width * scale,
+          height: rect.height * scale
+        })
+      })
+    }
 
     // ---- 内部滚动容器场景：先铺设外壳（页头、两侧、页脚），再插入滚动内容 ----
     if (captureRect) {
@@ -292,14 +368,58 @@ const ScreenshotService = {
       if (sourceWidth > 0 && sourceHeight > 0) {
         context.drawImage(capture.image, sourceX, sourceY + sourceOffsetY, sourceWidth, sourceHeight,
           destinationX, outputY, sourceWidth, sourceHeight)
+        rememberBox(capture, currentRect, sourceX, sourceY, sourceOffsetY, sourceWidth,
+          sourceHeight, destinationX, outputY)
       }
     }
-    return new Promise((resolve, reject) => {
+    // Internal scrolling keeps the complete first viewport shell. Elements outside the scrolling
+    // content rectangle retain their original first-screen coordinates.
+    if (captureRect && captures[0]) {
+      const rectLeft = captureRect.left * scale
+      const rectTop = captureRect.top * scale
+      const rectRight = (captureRect.left + captureRect.width) * scale
+      const rectBottom = (captureRect.top + captureRect.height) * scale
+      ;(captures[0].elementRects || []).forEach(elementInfo => {
+        rememberStatus(elementInfo)
+        const rect = elementInfo.rect
+        if (!rect || elementBoxes.has(elementInfo.id)) return
+        const left = rect.left * scale
+        const top = rect.top * scale
+        const right = rect.right * scale
+        const bottom = rect.bottom * scale
+        const insideScrollingContent = left >= rectLeft && right <= rectRight && top >= rectTop && bottom <= rectBottom
+        if (!insideScrollingContent && left >= 0 && top >= 0 && right <= width && bottom <= captures[0].image.naturalHeight) {
+          const movedTop = top >= rectBottom ? top + pageInfo.maxScrollY * scale : top
+          elementBoxes.set(elementInfo.id, { left, top: movedTop, width: rect.width * scale, height: rect.height * scale })
+        }
+      })
+    }
+
+    const positions = {}
+    ;(captureItems || []).forEach(item => {
+      const box = elementBoxes.get(item.id)
+      const completeBox = box && box.left >= 0 && box.top >= 0 &&
+        box.left + box.width <= width && box.top + box.height <= height
+      const itemStatus = itemStatuses.get(item.id)
+      positions[item.id] = completeBox
+        ? {
+            x: box.left / width,
+            y: box.top / height,
+            width: box.width / width,
+            height: box.height / height,
+            coordinateType: 'normalized',
+            status: 'captured'
+          }
+        : { status: itemStatus === 'target-not-found' || itemStatus === 'not-visible' ? itemStatus : 'not-captured' }
+    })
+
+    const blob = await new Promise((resolve, reject) => {
       canvas.toBlob(blob => {
         if (blob) resolve(blob)
         else reject(new Error('截图图片编码失败'))
       }, 'image/png')
     })
+    return { blob, width, height, positions }
   },
 
   /**

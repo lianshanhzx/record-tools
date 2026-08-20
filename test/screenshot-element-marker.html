@@ -1,0 +1,634 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>截图元素标记测试</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #18202b;
+      --muted: #667085;
+      --line: #d8dee8;
+      --panel: #ffffff;
+      --soft: #f4f6f9;
+      --blue: #155eef;
+      --red: #e11919;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: #e9edf3;
+      color: var(--ink);
+      font-family: Arial, "Microsoft YaHei", sans-serif;
+    }
+
+    button, input, select { font: inherit; }
+
+    .app {
+      min-height: 100vh;
+      display: grid;
+      grid-template-columns: 360px minmax(0, 1fr);
+    }
+
+    .sidebar {
+      min-height: 100vh;
+      padding: 20px;
+      overflow-y: auto;
+      border-right: 1px solid var(--line);
+      background: var(--panel);
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 22px;
+      line-height: 1.3;
+    }
+
+    .intro {
+      margin: 8px 0 20px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.6;
+    }
+
+    .field {
+      margin-bottom: 16px;
+    }
+
+    .field-label {
+      display: block;
+      margin-bottom: 6px;
+      font-size: 13px;
+      font-weight: 700;
+    }
+
+    .file-input, select {
+      width: 100%;
+      min-height: 38px;
+      padding: 8px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: #fff;
+    }
+
+    .file-name {
+      margin-top: 5px;
+      overflow: hidden;
+      color: var(--muted);
+      font-size: 12px;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .summary {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 8px;
+      margin: 18px 0;
+    }
+
+    .summary-item {
+      padding: 10px 6px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: var(--soft);
+      text-align: center;
+    }
+
+    .summary-item strong {
+      display: block;
+      font-size: 18px;
+    }
+
+    .summary-item span {
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .list-toolbar, .action-row {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+
+    .btn {
+      min-height: 34px;
+      padding: 7px 12px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: #fff;
+      color: var(--ink);
+      cursor: pointer;
+    }
+
+    .btn:hover { border-color: #98a2b3; background: var(--soft); }
+    .btn:disabled { opacity: 0.45; cursor: not-allowed; }
+
+    .btn-primary {
+      flex: 1;
+      border-color: var(--blue);
+      background: var(--blue);
+      color: #fff;
+      font-weight: 700;
+    }
+
+    .btn-primary:hover { background: #004eeb; }
+
+    .element-list {
+      max-height: 42vh;
+      overflow-y: auto;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: #fff;
+    }
+
+    .empty-list {
+      padding: 24px 14px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.6;
+      text-align: center;
+    }
+
+    .element-row {
+      display: grid;
+      grid-template-columns: 20px minmax(0, 1fr);
+      gap: 9px;
+      padding: 9px 10px;
+      border-bottom: 1px solid #eef1f5;
+      cursor: pointer;
+    }
+
+    .element-row:last-child { border-bottom: 0; }
+    .element-row:hover { background: #f8faff; }
+    .element-row.unavailable { opacity: 0.56; }
+
+    .element-name {
+      overflow: hidden;
+      font-size: 13px;
+      font-weight: 700;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .element-meta {
+      margin-top: 3px;
+      overflow: hidden;
+      color: var(--muted);
+      font-family: Consolas, monospace;
+      font-size: 11px;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .status {
+      min-height: 20px;
+      margin-top: 12px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.5;
+    }
+
+    .status.error { color: #b42318; }
+    .status.success { color: #067647; }
+
+    .workspace {
+      min-width: 0;
+      padding: 20px;
+      overflow: auto;
+    }
+
+    .workspace-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 12px;
+    }
+
+    .workspace-title {
+      font-size: 14px;
+      font-weight: 700;
+    }
+
+    .image-info {
+      color: var(--muted);
+      font-family: Consolas, monospace;
+      font-size: 12px;
+    }
+
+    .canvas-shell {
+      min-height: calc(100vh - 74px);
+      display: flex;
+      align-items: flex-start;
+      justify-content: center;
+      padding: 18px;
+      overflow: auto;
+      border: 1px solid #cdd5df;
+      border-radius: 8px;
+      background-color: #cfd6df;
+      background-image:
+        linear-gradient(45deg, #c3cad3 25%, transparent 25%),
+        linear-gradient(-45deg, #c3cad3 25%, transparent 25%),
+        linear-gradient(45deg, transparent 75%, #c3cad3 75%),
+        linear-gradient(-45deg, transparent 75%, #c3cad3 75%);
+      background-position: 0 0, 0 8px, 8px -8px, -8px 0;
+      background-size: 16px 16px;
+    }
+
+    canvas {
+      display: block;
+      max-width: 100%;
+      height: auto;
+      background: #fff;
+      box-shadow: 0 8px 28px rgba(16, 24, 40, 0.22);
+    }
+
+    .canvas-placeholder {
+      align-self: center;
+      max-width: 460px;
+      padding: 30px;
+      border: 1px dashed #98a2b3;
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.82);
+      color: var(--muted);
+      line-height: 1.8;
+      text-align: center;
+    }
+
+    @media (max-width: 860px) {
+      .app { grid-template-columns: 1fr; }
+      .sidebar { min-height: auto; border-right: 0; border-bottom: 1px solid var(--line); }
+      .element-list { max-height: 300px; }
+      .workspace { padding: 12px; }
+      .canvas-shell { min-height: 60vh; padding: 8px; }
+    }
+  </style>
+</head>
+<body>
+  <main class="app">
+    <aside class="sidebar">
+      <h1>截图元素标记测试</h1>
+      <p class="intro">上传录制工具下载的 JSON 和对应截图。选择分组与元素后，点击“点亮标记”即可在截图上绘制红色边框。</p>
+
+      <div class="field">
+        <label class="field-label" for="jsonFile">1. 上传 JSON 文件</label>
+        <input class="file-input" id="jsonFile" type="file" accept="application/json,.json">
+        <div class="file-name" id="jsonFileName">未选择文件</div>
+      </div>
+
+      <div class="field">
+        <label class="field-label" for="imageFile">2. 上传截图图片</label>
+        <input class="file-input" id="imageFile" type="file" accept="image/*">
+        <div class="file-name" id="imageFileName">未选择文件</div>
+      </div>
+
+      <div class="field">
+        <label class="field-label" for="groupSelect">3. 选择截图所属分组</label>
+        <select id="groupSelect" disabled>
+          <option value="">请先上传 JSON</option>
+        </select>
+      </div>
+
+      <div class="summary">
+        <div class="summary-item"><strong id="groupCount">0</strong><span>截图分组</span></div>
+        <div class="summary-item"><strong id="elementCount">0</strong><span>当前元素</span></div>
+        <div class="summary-item"><strong id="selectedCount">0</strong><span>已勾选</span></div>
+      </div>
+
+      <div class="list-toolbar">
+        <button class="btn" id="selectAllBtn" type="button" disabled>全选可标记</button>
+        <button class="btn" id="clearSelectionBtn" type="button" disabled>清空勾选</button>
+      </div>
+
+      <div class="element-list" id="elementList">
+        <div class="empty-list">上传 JSON 后将在这里显示元素。</div>
+      </div>
+
+      <div class="action-row" style="margin-top: 12px;">
+        <button class="btn btn-primary" id="highlightBtn" type="button" disabled>点亮标记</button>
+        <button class="btn" id="clearMarksBtn" type="button" disabled>清除红框</button>
+      </div>
+
+      <div class="status" id="status" aria-live="polite">等待上传文件。</div>
+    </aside>
+
+    <section class="workspace">
+      <div class="workspace-head">
+        <div class="workspace-title" id="canvasTitle">截图画布</div>
+        <div class="image-info" id="imageInfo">未加载图片</div>
+      </div>
+      <div class="canvas-shell" id="canvasShell">
+        <div class="canvas-placeholder" id="canvasPlaceholder">
+          请先上传截图图片。<br>
+          图片会按原始像素绘制到画布，再通过 CSS 自适应显示。
+        </div>
+        <canvas id="canvas" hidden></canvas>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    (function () {
+      'use strict'
+
+      const jsonFile = document.getElementById('jsonFile')
+      const imageFile = document.getElementById('imageFile')
+      const jsonFileName = document.getElementById('jsonFileName')
+      const imageFileName = document.getElementById('imageFileName')
+      const groupSelect = document.getElementById('groupSelect')
+      const groupCount = document.getElementById('groupCount')
+      const elementCount = document.getElementById('elementCount')
+      const selectedCount = document.getElementById('selectedCount')
+      const elementList = document.getElementById('elementList')
+      const selectAllBtn = document.getElementById('selectAllBtn')
+      const clearSelectionBtn = document.getElementById('clearSelectionBtn')
+      const highlightBtn = document.getElementById('highlightBtn')
+      const clearMarksBtn = document.getElementById('clearMarksBtn')
+      const status = document.getElementById('status')
+      const canvas = document.getElementById('canvas')
+      const canvasPlaceholder = document.getElementById('canvasPlaceholder')
+      const canvasTitle = document.getElementById('canvasTitle')
+      const imageInfo = document.getElementById('imageInfo')
+      const context = canvas.getContext('2d')
+
+      let groups = []
+      let groupById = new Map()
+      let childrenByPid = new Map()
+      let currentElements = []
+      let loadedImage = null
+      let imageObjectUrl = ''
+      let marksVisible = false
+
+      function setStatus(message, type) {
+        status.textContent = message
+        status.className = 'status' + (type ? ' ' + type : '')
+      }
+
+      function escapeHtml(value) {
+        return String(value == null ? '' : value)
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;')
+          .replace(/'/g, '&#39;')
+      }
+
+      function isElementNode(node) {
+        return node && node.type === 'ele'
+      }
+
+      function hasNormalizedPosition(node) {
+        const position = node && node.position
+        return !!position && position.coordinateType === 'normalized' &&
+          [position.x, position.y, position.width, position.height].every(Number.isFinite) &&
+          position.width > 0 && position.height > 0
+      }
+
+      function getGroupPath(group) {
+        const names = []
+        let current = group
+        const visited = new Set()
+        while (current && !visited.has(current.id)) {
+          visited.add(current.id)
+          names.unshift(current.name || current.type || current.id)
+          current = groupById.get(current.pid)
+        }
+        return names.join(' / ')
+      }
+
+      function getDirectElements(groupId) {
+        return (childrenByPid.get(groupId) || []).filter(isElementNode)
+      }
+
+      function rebuildIndexes(nodes) {
+        groups = nodes.filter(node => node && !isElementNode(node))
+        groupById = new Map(groups.map(group => [group.id, group]))
+        childrenByPid = new Map()
+        nodes.forEach(node => {
+          const pid = node && node.pid
+          if (!childrenByPid.has(pid)) childrenByPid.set(pid, [])
+          childrenByPid.get(pid).push(node)
+        })
+      }
+
+      function populateGroupSelect() {
+        const screenshotGroups = groups.filter(group => Array.isArray(group.screenshots) && group.screenshots.length > 0)
+        const selectableGroups = screenshotGroups.length > 0 ? screenshotGroups : groups
+
+        groupSelect.innerHTML = '<option value="">请选择分组</option>' + selectableGroups.map(group => {
+          const count = getDirectElements(group.id).length
+          const screenshot = Array.isArray(group.screenshots) && group.screenshots[0]
+            ? ' | ' + group.screenshots[0].split('/').pop()
+            : ' | 无截图链接'
+          return '<option value="' + escapeHtml(group.id) + '">' +
+            escapeHtml(getGroupPath(group) + ' (' + count + ' 个元素)' + screenshot) + '</option>'
+        }).join('')
+
+        groupCount.textContent = String(selectableGroups.length)
+        groupSelect.disabled = selectableGroups.length === 0
+        if (selectableGroups.length === 1) {
+          groupSelect.value = selectableGroups[0].id
+          updateCurrentGroup()
+        } else {
+          currentElements = []
+          renderElementList()
+        }
+      }
+
+      function updateCurrentGroup() {
+        const group = groupById.get(groupSelect.value)
+        currentElements = group ? getDirectElements(group.id) : []
+        marksVisible = false
+        canvasTitle.textContent = group ? '截图画布 - ' + getGroupPath(group) : '截图画布'
+        renderElementList()
+        drawCanvas()
+      }
+
+      function renderElementList() {
+        elementCount.textContent = String(currentElements.length)
+        if (currentElements.length === 0) {
+          elementList.innerHTML = '<div class="empty-list">当前分组没有直接关联的元素记录。</div>'
+          selectedCount.textContent = '0'
+          updateButtons()
+          return
+        }
+
+        elementList.innerHTML = currentElements.map((element, index) => {
+          const available = hasNormalizedPosition(element)
+          const name = element.params && element.params.label_text
+            ? element.params.label_text
+            : element.propertiesName || element.name || ('元素 ' + (index + 1))
+          const meta = available
+            ? (element.command || element.action || 'ele') + ' | ' + (element.target || element.id)
+            : '不可标记：' + (element.positionStatus || '缺少 normalized position')
+          return '<label class="element-row' + (available ? '' : ' unavailable') + '">' +
+            '<input class="element-check" type="checkbox" data-element-id="' + escapeHtml(element.id) + '"' + (available ? '' : ' disabled') + '>' +
+            '<span><span class="element-name">' + escapeHtml(name) + '</span>' +
+            '<span class="element-meta" title="' + escapeHtml(meta) + '">' + escapeHtml(meta) + '</span></span>' +
+            '</label>'
+        }).join('')
+
+        elementList.querySelectorAll('.element-check').forEach(check => {
+          check.addEventListener('change', function () {
+            marksVisible = false
+            updateButtons()
+            drawCanvas()
+          })
+        })
+        updateButtons()
+      }
+
+      function getSelectedElementIds() {
+        return new Set(Array.from(elementList.querySelectorAll('.element-check:checked')).map(check => check.dataset.elementId))
+      }
+
+      function updateButtons() {
+        const availableChecks = Array.from(elementList.querySelectorAll('.element-check:not(:disabled)'))
+        const checkedCount = availableChecks.filter(check => check.checked).length
+        selectedCount.textContent = String(checkedCount)
+        selectAllBtn.disabled = availableChecks.length === 0
+        clearSelectionBtn.disabled = checkedCount === 0
+        highlightBtn.disabled = !loadedImage || checkedCount === 0
+        clearMarksBtn.disabled = !loadedImage || !marksVisible
+      }
+
+      function drawCanvas() {
+        if (!loadedImage) return
+        context.clearRect(0, 0, canvas.width, canvas.height)
+        context.drawImage(loadedImage, 0, 0, canvas.width, canvas.height)
+
+        if (!marksVisible) {
+          updateButtons()
+          return
+        }
+
+        const selectedIds = getSelectedElementIds()
+        const lineWidth = Math.max(3, Math.round(Math.min(canvas.width, canvas.height) / 500))
+        context.save()
+        context.strokeStyle = '#e11919'
+        context.fillStyle = 'rgba(225, 25, 25, 0.12)'
+        context.lineWidth = lineWidth
+        context.font = Math.max(14, lineWidth * 5) + 'px Arial'
+
+        let number = 0
+        currentElements.forEach(element => {
+          if (!selectedIds.has(String(element.id)) || !hasNormalizedPosition(element)) return
+          number++
+          const position = element.position
+          const x = position.x * canvas.width
+          const y = position.y * canvas.height
+          const width = position.width * canvas.width
+          const height = position.height * canvas.height
+          const inset = lineWidth / 2
+
+          context.fillRect(x, y, width, height)
+          context.strokeRect(x + inset, y + inset, Math.max(0, width - lineWidth), Math.max(0, height - lineWidth))
+
+          const badgeText = String(number)
+          const badgeSize = Math.max(20, lineWidth * 7)
+          const badgeX = Math.max(0, x - badgeSize / 2)
+          const badgeY = Math.max(0, y - badgeSize / 2)
+          context.fillStyle = '#e11919'
+          context.fillRect(badgeX, badgeY, badgeSize, badgeSize)
+          context.fillStyle = '#ffffff'
+          context.textAlign = 'center'
+          context.textBaseline = 'middle'
+          context.fillText(badgeText, badgeX + badgeSize / 2, badgeY + badgeSize / 2)
+          context.fillStyle = 'rgba(225, 25, 25, 0.12)'
+        })
+        context.restore()
+        updateButtons()
+      }
+
+      jsonFile.addEventListener('change', async function () {
+        const file = jsonFile.files && jsonFile.files[0]
+        if (!file) return
+        jsonFileName.textContent = file.name
+        try {
+          const payload = JSON.parse(await file.text())
+          if (!payload || !Array.isArray(payload.groups)) throw new Error('JSON 中缺少 groups 数组')
+          rebuildIndexes(payload.groups)
+          populateGroupSelect()
+          setStatus('JSON 加载成功，共读取 ' + payload.groups.length + ' 个节点。', 'success')
+        } catch (error) {
+          groups = []
+          groupById = new Map()
+          childrenByPid = new Map()
+          currentElements = []
+          groupSelect.innerHTML = '<option value="">JSON 读取失败</option>'
+          groupSelect.disabled = true
+          renderElementList()
+          setStatus('JSON 加载失败：' + error.message, 'error')
+        }
+      })
+
+      imageFile.addEventListener('change', function () {
+        const file = imageFile.files && imageFile.files[0]
+        if (!file) return
+        imageFileName.textContent = file.name
+        if (imageObjectUrl) URL.revokeObjectURL(imageObjectUrl)
+        imageObjectUrl = URL.createObjectURL(file)
+        const image = new Image()
+        image.onload = function () {
+          loadedImage = image
+          canvas.width = image.naturalWidth
+          canvas.height = image.naturalHeight
+          canvas.hidden = false
+          canvasPlaceholder.hidden = true
+          imageInfo.textContent = image.naturalWidth + ' x ' + image.naturalHeight + ' px'
+          marksVisible = false
+          drawCanvas()
+          setStatus('截图加载成功，可以勾选元素并点亮标记。', 'success')
+        }
+        image.onerror = function () {
+          loadedImage = null
+          canvas.hidden = true
+          canvasPlaceholder.hidden = false
+          imageInfo.textContent = '图片加载失败'
+          updateButtons()
+          setStatus('截图图片加载失败，请选择有效图片。', 'error')
+        }
+        image.src = imageObjectUrl
+      })
+
+      groupSelect.addEventListener('change', updateCurrentGroup)
+
+      selectAllBtn.addEventListener('click', function () {
+        elementList.querySelectorAll('.element-check:not(:disabled)').forEach(check => { check.checked = true })
+        marksVisible = false
+        updateButtons()
+        drawCanvas()
+      })
+
+      clearSelectionBtn.addEventListener('click', function () {
+        elementList.querySelectorAll('.element-check').forEach(check => { check.checked = false })
+        marksVisible = false
+        updateButtons()
+        drawCanvas()
+      })
+
+      highlightBtn.addEventListener('click', function () {
+        marksVisible = true
+        drawCanvas()
+        const count = getSelectedElementIds().size
+        setStatus('已在截图上点亮 ' + count + ' 个元素。', 'success')
+      })
+
+      clearMarksBtn.addEventListener('click', function () {
+        marksVisible = false
+        drawCanvas()
+        setStatus('已清除画布红框，元素勾选状态保留。')
+      })
+
+      window.addEventListener('beforeunload', function () {
+        if (imageObjectUrl) URL.revokeObjectURL(imageObjectUrl)
+      })
+    })()
+  </script>
+</body>
+</html>

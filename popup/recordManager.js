@@ -87,8 +87,18 @@ const RecordManager = {
         (item.anchorTarget || '') === (incoming.anchorTarget || '') &&
         (item.pageKey || '') === (incoming.pageKey || '')
       )
-      if (index >= 0) this.scannedElementList[index] = Object.assign({}, this.scannedElementList[index], incoming)
-      else this.scannedElementList.push(Object.assign({}, incoming))
+      if (index >= 0) {
+        const existing = this.scannedElementList[index]
+        const screenshotPosition = existing.screenshotPosition
+        this.scannedElementList[index] = Object.assign({}, existing, incoming, {
+          scanPosition: incoming.position || existing.scanPosition,
+          screenshotPosition: screenshotPosition,
+          position: screenshotPosition || incoming.position || existing.position,
+          positionStatus: screenshotPosition ? existing.positionStatus : incoming.positionStatus
+        })
+      } else {
+        this.scannedElementList.push(Object.assign({}, incoming, { scanPosition: incoming.position }))
+      }
     }
     this.scannedElementList = this.sortByScanIndex(this.scannedElementList)
   },
@@ -309,7 +319,9 @@ const RecordManager = {
       const screenshotCount = self.getGroupScreenshotCount(node.key)
       const nodePageKey = node.path && node.path[0] ? node.path[0].key : ''
       const isHistoricalPage = !!self.currentPageKey && nodePageKey !== self.currentPageKey
-      const screenshotDisabled = self.screenshotCaptureGroupKey !== null || isHistoricalPage ? ' disabled' : ''
+      const screenshotDisabled = (self.screenshotCaptureGroupKey !== null && self.screenshotCaptureGroupKey !== node.key) || isHistoricalPage
+        ? ' disabled'
+        : ''
       const screenshotText = self.screenshotCaptureGroupKey === node.key ? self.screenshotCaptureText : '截图'
       const groupTitle = node.type === 'page' && node.url ? node.name + ' - ' + node.url : node.name
       html += '<div class="list-group-header group-type-' + escHtml(node.type) + '" data-group-key="' + escHtml(node.key) + '" style="padding-left:' + indent + 'px">'
@@ -492,6 +504,7 @@ const RecordManager = {
     source.pageOrder = target.pageOrder
     source.anchorTarget = target.anchorTarget || ''
     source.anchorPropertiesName = target.anchorPropertiesName || ''
+    this.clearScreenshotPosition(source)
 
     const ordered = this.sortByScanIndex(this.recordActionList).filter(item => item !== source)
     const targetIndex = ordered.indexOf(target)
@@ -605,6 +618,8 @@ const RecordManager = {
             scanIndex: typeof el.scanIndex === 'number' ? el.scanIndex : this.recordActionList[byTarget].scanIndex,
             pageUrl: el.pageUrl || this.recordActionList[byTarget].pageUrl,
             pageOrder: typeof el.pageOrder === 'number' ? el.pageOrder : this.recordActionList[byTarget].pageOrder,
+            scanPosition: el.position || this.recordActionList[byTarget].scanPosition,
+            position: this.recordActionList[byTarget].screenshotPosition || el.position || this.recordActionList[byTarget].position,
             options: el.options && el.options.length > 0
               ? el.options : this.recordActionList[byTarget].options,
             anchorTarget: el.anchorTarget || this.recordActionList[byTarget].anchorTarget,
@@ -662,6 +677,27 @@ const RecordManager = {
   /** 按展示树节点 key 反查分组节点（供删除/截图/折叠等按键使用）。 */
   getGroupNode(groupKey) {
     return this.displayGroupMap.get(groupKey) || null
+  },
+
+  /** 收集分组直接包含的元素记录，坐标只绑定到其直接父分组截图。 */
+  getGroupItems(node) {
+    if (!node) return []
+    return node.entries
+      .filter(entry => entry.kind === 'item')
+      .map(entry => entry.item)
+  },
+
+  /** 收集分组全部后代元素，仅用于计算自动截图停止边界。 */
+  getGroupBoundaryItems(node) {
+    const items = []
+    function collect(currentNode) {
+      currentNode.entries.forEach(entry => {
+        if (entry.kind === 'item') items.push(entry.item)
+        else collect(entry.node)
+      })
+    }
+    if (node) collect(node)
+    return items
   },
 
   /**
@@ -733,23 +769,67 @@ const RecordManager = {
       const node = this.getGroupNode(groupKey)
       const nodePageKey = node && node.path && node.path[0] ? node.path[0].key : ''
       const isHistoricalPage = !!this.currentPageKey && nodePageKey !== this.currentPageKey
-      button.disabled = this.screenshotCaptureGroupKey !== null || isHistoricalPage
+      const isCurrentCapture = groupKey === this.screenshotCaptureGroupKey
+      button.disabled = (this.screenshotCaptureGroupKey !== null && !isCurrentCapture) || isHistoricalPage
       button.textContent = groupKey === this.screenshotCaptureGroupKey
         ? this.screenshotCaptureText
         : '截图'
     })
   },
 
-  /** 追加一张截图到分组并重渲染（渲染标题上的截图数量）。 */
+  /** 每个分组只保留一张当前有效截图。 */
   addGroupScreenshot(groupKey, screenshotPath) {
-    if (!this.groupScreenshots[groupKey]) this.groupScreenshots[groupKey] = []
-    this.groupScreenshots[groupKey].push(screenshotPath)
+    this.groupScreenshots[groupKey] = screenshotPath ? [screenshotPath] : []
     this.renderRecordList(this.recordInfoLit)
+  },
+
+  /** 把截图画布归一化坐标写回操作记录，并保留扫描阶段的原始坐标。 */
+  applyScreenshotPositions(items, positions) {
+    ;(items || []).forEach(item => {
+      const screenshotPosition = positions && positions[item.id]
+      if (!screenshotPosition) return
+      if (!item.scanPosition && item.position) item.scanPosition = item.position
+      item.screenshotPosition = screenshotPosition.status === 'captured'
+        ? {
+            x: screenshotPosition.x,
+            y: screenshotPosition.y,
+            width: screenshotPosition.width,
+            height: screenshotPosition.height,
+            coordinateType: screenshotPosition.coordinateType
+          }
+        : null
+      item.position = item.screenshotPosition
+      item.positionStatus = screenshotPosition.status
+
+      const scanned = this.scannedElementList.find(candidate => candidate.id === item.id)
+      if (scanned && scanned !== item) {
+        if (!scanned.scanPosition && scanned.position) scanned.scanPosition = scanned.position
+        scanned.screenshotPosition = item.screenshotPosition
+        scanned.position = item.position
+        scanned.positionStatus = item.positionStatus
+      }
+    })
+  },
+
+  clearScreenshotPosition(item) {
+    if (!item) return
+    item.screenshotPosition = null
+    item.position = null
+    item.positionStatus = 'not-captured'
   },
 
   /** 从分组移除指定截图并重渲染（磁盘文件删除由调用方负责）。 */
   removeGroupScreenshot(groupKey, screenshotPath) {
     this.groupScreenshots[groupKey] = this.getGroupScreenshots(groupKey).filter(path => path !== screenshotPath)
+    if (this.groupScreenshots[groupKey].length === 0) {
+      this.getGroupItems(this.getGroupNode(groupKey)).forEach(item => {
+        this.clearScreenshotPosition(item)
+        const scanned = this.scannedElementList.find(candidate => candidate.id === item.id)
+        if (scanned && scanned !== item) {
+          this.clearScreenshotPosition(scanned)
+        }
+      })
+    }
     this.renderRecordList(this.recordInfoLit)
   },
 
@@ -783,6 +863,10 @@ const RecordManager = {
         routeIdentity,
         pageOrder,
         manualOrder,
+        scanPosition,
+        screenshotPosition,
+        positionStatus,
+        position,
         _recordKey,
         ...action
       } = item
@@ -796,6 +880,8 @@ const RecordManager = {
         id: item.id,
         pid: parentId,
         type: 'ele',
+        position: screenshotPosition || null,
+        positionStatus: positionStatus || (screenshotPosition ? 'captured' : 'not-captured'),
         params: { label_text: item.propertiesName, value: item.value || '' },
         attr: attr
       })
@@ -938,7 +1024,7 @@ const RecordManager = {
       $('#editVal').val(self.currentRecordInfo.value || '')
     })
 
-    // 分组截图按钮：整页滚动截图，期间禁用所有截图按钮，完成后追加到分组。
+    // 分组截图按钮：截图期间当前按钮可再次点击，用于停止滚动并生成已捕获内容。
     $(document).on('click', '.group-screenshot-btn', async function (e) {
       e.preventDefault()
       e.stopImmediatePropagation()
@@ -947,21 +1033,39 @@ const RecordManager = {
       const groupNode = self.getGroupNode(groupKey)
       if (!groupNode) return
 
-      const tab = await getCurrentTab()
-      if (!tab || !tab.id) {
-        alert('无法获取目标页面')
+      if (self.screenshotCaptureGroupKey === groupKey && ScreenshotService.isCapturing) {
+        ScreenshotService.requestStop()
+        self.setScreenshotCaptureState(groupKey, '正在停止并生成')
         return
       }
 
-      self.setScreenshotCaptureState(groupKey, '正在截图中')
+      if (self.screenshotCaptureGroupKey !== null || ScreenshotService.isCapturing) return
+      self.setScreenshotCaptureState(groupKey, '准备截图')
+
+      let captureItems = []
       try {
-        const screenshotPath = await ScreenshotService.captureFullPage(tab, groupNode, (current, total) => {
-          self.setScreenshotCaptureState(groupKey, '正在截图中 ' + current + '/' + total)
+        const tab = await getCurrentTab()
+        if (!tab || !tab.id) throw new Error('无法获取目标页面')
+
+        captureItems = self.getGroupItems(groupNode).filter(item => item.id && item.target)
+        const boundaryItems = self.getGroupBoundaryItems(groupNode).filter(item => item.target)
+        groupNode.captureItems = captureItems.map(item => ({ id: item.id, target: item.target }))
+        groupNode.captureBoundaryItems = boundaryItems.map(item => ({ id: item.id, target: item.target }))
+        self.setScreenshotCaptureState(groupKey, '停止并生成')
+        const screenshot = await ScreenshotService.captureFullPage(tab, groupNode, (current, total) => {
+          self.setScreenshotCaptureState(groupKey, '停止并生成 ' + current + '/' + total)
         })
-        self.addGroupScreenshot(groupKey, screenshotPath)
+        const previousPath = self.getGroupScreenshots(groupKey)[0]
+        if (previousPath && previousPath !== screenshot.path) {
+          try { await ScreenshotService.deleteScreenshot(previousPath) } catch (e) {}
+        }
+        self.applyScreenshotPositions(captureItems, screenshot.positions)
+        self.addGroupScreenshot(groupKey, screenshot.path)
       } catch (error) {
         alert('截图失败: ' + error.message)
       } finally {
+        delete groupNode.captureItems
+        delete groupNode.captureBoundaryItems
         self.setScreenshotCaptureState(null)
       }
     })

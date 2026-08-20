@@ -95,27 +95,73 @@ function getTopVisibleScreenshotDialog() {
   return best ? best.element : null
 }
 
-function getScreenshotScrollTarget() {
+function resolveScreenshotXPath(xpath) {
+  if (!xpath || typeof xpath !== 'string') return null
+  try {
+    return document.evaluate(xpath, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue
+  } catch (e) {
+    return null
+  }
+}
+
+function resolveScreenshotGroupElement(groupContext) {
+  const path = groupContext && Array.isArray(groupContext.path) ? groupContext.path : []
+  for (let index = path.length - 1; index >= 0; index--) {
+    if (!path[index] || path[index].type === 'page') continue
+    const key = String(path[index].key || '').split('@@anchor=')[0]
+    const element = resolveScreenshotXPath(key)
+    if (element && element.isConnected) return element
+  }
+  return null
+}
+
+function getScreenshotVisualElement(element) {
+  if (!element || !element.isConnected) return null
+  const selectors = [
+    '.el-radio', '.el-checkbox', '.el-select', '.el-date-editor', '.el-switch',
+    '.el-upload', 'button', '[role="button"]'
+  ]
+  for (const selector of selectors) {
+    const visual = element.closest && element.closest(selector)
+    if (visual && visual.isConnected) {
+      const style = getComputedStyle(visual)
+      if (style.display !== 'none' && style.visibility !== 'hidden') return visual
+    }
+  }
+  return element
+}
+
+function getScreenshotScrollTarget(groupContext) {
   const documentScroller = document.scrollingElement || document.documentElement
   const viewportArea = Math.max(1, window.innerWidth * window.innerHeight)
   const documentRange = Math.max(0, documentScroller.scrollHeight - documentScroller.clientHeight)
   const documentTarget = { element: documentScroller, isDocument: true, score: viewportArea }
+  const groupElement = resolveScreenshotGroupElement(groupContext)
+  const groupType = groupContext && groupContext.type
+  const boundaryElements = groupContext && Array.isArray(groupContext.boundaryItems)
+    ? groupContext.boundaryItems.map(item => resolveScreenshotXPath(item && item.target)).filter(Boolean)
+    : []
   const dialog = getTopVisibleScreenshotDialog()
   let best = null
 
   // A visible modal owns the screenshot interaction context. Never consider ancestors or the
   // document behind it, otherwise a non-scrollable dialog would cause the covered page to scroll.
-  const searchRoot = dialog || document.body
+  const searchRoot = groupElement || dialog || document.body
   const candidates = searchRoot
     ? [searchRoot, ...searchRoot.querySelectorAll('*')]
     : []
   for (const element of candidates) {
     if (element === documentScroller) continue
+    if (element.matches('textarea, input, select, [contenteditable="true"]')) continue
     const style = getComputedStyle(element)
     if (!/(auto|scroll|overlay)/.test(style.overflowY)) continue
 
     const scrollRange = element.scrollHeight - element.clientHeight
     if (scrollRange <= 2 || element.clientWidth <= 0 || element.clientHeight <= 0) continue
+    const boundaryCoverage = groupElement && boundaryElements.length > 0
+      ? boundaryElements.filter(boundary => element.contains(boundary)).length
+      : 0
+    if (groupElement && element !== groupElement && boundaryElements.length > 0 && boundaryCoverage === 0) continue
 
     const rect = element.getBoundingClientRect()
     const contentLeft = rect.left + element.clientLeft
@@ -129,13 +175,30 @@ function getScreenshotScrollTarget() {
     if (visibleWidth <= 0 || visibleHeight <= 0) continue
 
     const visibleArea = visibleWidth * visibleHeight
-    if (!dialog && (visibleWidth < window.innerWidth * 0.25 || visibleHeight < window.innerHeight * 0.25 || visibleArea < viewportArea * 0.15)) continue
+    if (!dialog && !groupElement &&
+        (visibleWidth < window.innerWidth * 0.25 || visibleHeight < window.innerHeight * 0.25 || visibleArea < viewportArea * 0.15)) continue
 
     const score = visibleArea * Math.min(4, element.scrollHeight / Math.max(1, element.clientHeight))
-    if (!best || score > best.score) {
-      best = { element, isDocument: false, score, visibleArea, scrollRange }
+    if (!best || boundaryCoverage > best.boundaryCoverage ||
+        (boundaryCoverage === best.boundaryCoverage && score > best.score)) {
+      best = { element, isDocument: false, score, visibleArea, scrollRange, boundaryCoverage }
     }
   }
+  if (groupElement && !best) {
+    let ancestor = groupElement.parentElement
+    while (ancestor && ancestor !== document.body && ancestor !== document.documentElement) {
+      const style = getComputedStyle(ancestor)
+      if (/(auto|scroll|overlay)/.test(style.overflowY) && ancestor.scrollHeight - ancestor.clientHeight > 2) {
+        best = { element: ancestor, isDocument: false }
+        break
+      }
+      ancestor = ancestor.parentElement
+    }
+  }
+  if (groupElement && groupType === 'dialog') {
+    return best || { element: null, isDocument: false, isViewport: true }
+  }
+  if (groupElement) return best || documentTarget
   if (dialog) {
     // No scrollbar inside the active dialog: capture the current viewport once without moving
     // either the dialog or its covered background document.
@@ -149,6 +212,49 @@ function getScreenshotScrollTarget() {
   return documentHasMinorOverflow && internalIsPrimary ? best : documentTarget
 }
 
+function getScreenshotElementRects() {
+  const state = screenshotScrollState
+  const items = state && Array.isArray(state.items) ? state.items : []
+  return items.map(item => {
+    const target = getScreenshotVisualElement(resolveScreenshotXPath(item.target))
+    if (!target || !target.isConnected) return { id: item.id, status: 'target-not-found' }
+    const rect = target.getBoundingClientRect()
+    const visible = rect.width > 0 && rect.height > 0 && rect.right > 0 && rect.bottom > 0 &&
+      rect.left < window.innerWidth && rect.top < window.innerHeight
+    return {
+      id: item.id,
+      status: visible ? 'visible' : 'not-visible',
+      rect: {
+        left: rect.left,
+        top: rect.top,
+        right: rect.right,
+        bottom: rect.bottom,
+        width: rect.width,
+        height: rect.height
+      }
+    }
+  })
+}
+
+function getScreenshotGroupMaxScrollY(target, items, defaultMaxScrollY) {
+  if (!items || items.length === 0) return defaultMaxScrollY
+  let lastBottom = null
+  for (const item of items) {
+    const element = getScreenshotVisualElement(resolveScreenshotXPath(item.target))
+    if (!element || !element.isConnected) continue
+    if (!target.isDocument && !target.element.contains(element)) continue
+    const rect = element.getBoundingClientRect()
+    const bottom = target.isDocument
+      ? rect.bottom + window.scrollY
+      : rect.bottom - (target.element.getBoundingClientRect().top + target.element.clientTop) + target.element.scrollTop
+    if (Number.isFinite(bottom)) lastBottom = lastBottom === null ? bottom : Math.max(lastBottom, bottom)
+  }
+  if (lastBottom === null) return defaultMaxScrollY
+  const viewportHeight = target.isDocument ? window.innerHeight : target.element.clientHeight
+  const bottomPadding = Math.min(120, Math.max(40, Math.floor(viewportHeight * 0.12)))
+  return Math.min(defaultMaxScrollY, Math.max(0, Math.ceil(lastBottom + bottomPadding - viewportHeight)))
+}
+
 function getScreenshotTargetMetrics() {
   const state = screenshotScrollState
   if (state && state.isViewport) {
@@ -160,7 +266,8 @@ function getScreenshotTargetMetrics() {
       viewportWidth: window.innerWidth,
       viewportHeight: window.innerHeight,
       maxScrollY: 0,
-      captureRect: null
+      captureRect: null,
+      elementRects: getScreenshotElementRects()
     }
   }
   if (!state || state.isDocument) {
@@ -172,8 +279,11 @@ function getScreenshotTargetMetrics() {
       documentHeight: size.height,
       viewportWidth: window.innerWidth,
       viewportHeight: window.innerHeight,
-      maxScrollY: Math.max(0, size.height - window.innerHeight),
-      captureRect: null
+      maxScrollY: state && typeof state.maxScrollY === 'number'
+        ? Math.min(state.maxScrollY, Math.max(0, size.height - window.innerHeight))
+        : Math.max(0, size.height - window.innerHeight),
+      captureRect: null,
+      elementRects: getScreenshotElementRects()
     }
   }
 
@@ -194,8 +304,11 @@ function getScreenshotTargetMetrics() {
     documentHeight: element.scrollHeight,
     viewportWidth: width,
     viewportHeight: height,
-    maxScrollY: Math.max(0, element.scrollHeight - element.clientHeight),
-    captureRect: { left, top, width, height }
+    maxScrollY: typeof state.maxScrollY === 'number'
+      ? Math.min(state.maxScrollY, Math.max(0, element.scrollHeight - element.clientHeight))
+      : Math.max(0, element.scrollHeight - element.clientHeight),
+    captureRect: { left, top, width, height },
+    elementRects: getScreenshotElementRects()
   }
 }
 
@@ -215,7 +328,13 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   // 全页截图：由 popup 控制滚动，content 只负责页面坐标与滚动位置恢复。
   if (request.type === 'prepareFullPageScreenshot') {
     const root = document.documentElement
-    const target = getScreenshotScrollTarget()
+    const target = getScreenshotScrollTarget(request.groupContext)
+    const items = request.groupContext && Array.isArray(request.groupContext.items)
+      ? request.groupContext.items.filter(item => item && item.id && item.target)
+      : []
+    const boundaryItems = request.groupContext && Array.isArray(request.groupContext.boundaryItems)
+      ? request.groupContext.boundaryItems.filter(item => item && item.target)
+      : items
     screenshotScrollState = {
       element: target.element,
       isDocument: target.isDocument,
@@ -224,11 +343,19 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       scrollY: target.isDocument ? window.scrollY : target.isViewport ? 0 : target.element.scrollTop,
       windowScrollX: window.scrollX,
       windowScrollY: window.scrollY,
+      items: items,
+      groupContext: request.groupContext || null,
       rootScrollBehavior: root.style.scrollBehavior,
       targetScrollBehavior: target.isDocument || target.isViewport ? null : target.element.style.scrollBehavior
     }
     root.style.scrollBehavior = 'auto'
     if (!target.isDocument && !target.isViewport) target.element.style.scrollBehavior = 'auto'
+    if (!target.isViewport) {
+      const defaultMaxScrollY = target.isDocument
+        ? Math.max(0, target.element.scrollHeight - target.element.clientHeight)
+        : Math.max(0, target.element.scrollHeight - target.element.clientHeight)
+      screenshotScrollState.maxScrollY = getScreenshotGroupMaxScrollY(target, boundaryItems, defaultMaxScrollY)
+    }
     const metrics = getScreenshotTargetMetrics()
     sendResponse(Object.assign(metrics, {
       windowWidth: window.innerWidth,
