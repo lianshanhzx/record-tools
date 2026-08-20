@@ -9,12 +9,12 @@
  *   - UploadService (popup/uploadService.js)  — 上传/下载服务
  */
 
-window.onload = function () {
+window.onload = async function () {
   main();
   // 调用 popup/autoFill.js → AutoFillUI.init
   AutoFillUI.init()
   // popup 打开时通知 content script 触发页面扫描
-  notifyPopupOpened()
+  await notifyPopupOpened()
   // popup 打开时自动开始录制（相当于自动点击"开始录制"按钮）
   document.getElementById('recordStartBtn').click()
 }
@@ -26,7 +26,31 @@ window.onload = function () {
 async function notifyPopupOpened() {
   const tab = await getCurrentTab()
   if (tab && tab.id) {
-    sendToContent(tab.id, { type: 'popupOpened' })
+    return await sendToContent(tab.id, { type: 'popupOpened' })
+  }
+  return null
+}
+
+const contentInjectionPromises = new Map()
+
+async function ensureContentInjected(tabId) {
+  if (contentInjectionPromises.has(tabId)) return contentInjectionPromises.get(tabId)
+  const promise = (async () => {
+    const tab = await chrome.tabs.get(tabId)
+    if (tab.url && tab.url.startsWith('chrome-extension://')) {
+      throw new Error('请先点击用户页面激活标签页')
+    }
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      files: ['/libs/utils.js', '/libs/autoFormFill.js', '/libs/smartSelector.js', '/libs/elementBusinessName.js', '/libs/myXPathHelper.js', '/config/scannerExclude.js', '/libs/elementGrouper.js', '/libs/pageElementScanner.js', '/content/recorder.js', '/content/treeSelectHandler.js', '/content/eventMonitor.js', '/content/messageHandler.js', '/content/pageElementScannerController.js', '/content/content.js']
+    })
+    await new Promise(resolve => setTimeout(resolve, 500))
+  })()
+  contentInjectionPromises.set(tabId, promise)
+  try {
+    await promise
+  } finally {
+    contentInjectionPromises.delete(tabId)
   }
 }
 
@@ -90,17 +114,7 @@ async function sendToContent(tabId, message) {
   } catch (e) {
     if (e.message.includes('Receiving end does not exist')) {
       try {
-        const tab = await chrome.tabs.get(tabId)
-        if (tab.url && tab.url.startsWith('chrome-extension://')) {
-          // 调用 popup/autoFill.js → AutoFillUI.addFillLog
-          AutoFillUI.addFillLog({ type: 'error', text: '请先点击用户页面激活标签页' })
-          return null
-        }
-        await chrome.scripting.executeScript({
-          target: { tabId },
-          files: ['/libs/utils.js', '/libs/autoFormFill.js', '/libs/smartSelector.js', '/libs/elementBusinessName.js', '/libs/myXPathHelper.js', '/config/scannerExclude.js', '/libs/elementGrouper.js', '/libs/pageElementScanner.js', '/content/recorder.js', '/content/treeSelectHandler.js', '/content/eventMonitor.js', '/content/messageHandler.js', '/content/pageElementScannerController.js', '/content/content.js']
-        })
-        await new Promise(r => setTimeout(r, 500))
+        await ensureContentInjected(tabId)
         return await chrome.tabs.sendMessage(tabId, message)
       } catch (e2) {
         // 调用 popup/autoFill.js → AutoFillUI.addFillLog

@@ -8,8 +8,13 @@
 // 方法1：查找label[for="id"]
 function getLabelByFor(element) {
   if (!element.id) return null;
-  const label = Array.from(document.querySelectorAll('label[for]'))
-    .find(item => item.getAttribute('for') === element.id);
+  let label = null
+  try {
+    const escapedId = typeof CSS !== 'undefined' && typeof CSS.escape === 'function'
+      ? CSS.escape(element.id)
+      : element.id.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
+    label = document.querySelector('label[for="' + escapedId + '"]')
+  } catch (e) {}
 
   return label ? label.textContent.trim() : null;
 }
@@ -44,7 +49,7 @@ function _getButtonOwnName(element) {
 }
 
 // 方法2：查找包裹元素的label
-function getWrappingLabel(element) {
+function getWrappingLabel(element, appendButtonName = true) {
   let label = element.closest('label');
   if(label){
     return label.textContent.trim(); 
@@ -58,7 +63,7 @@ function getWrappingLabel(element) {
   if(formItemContent){ 
     label = formItemContent.querySelector('label')
     var formItemLabelText = label ? label.textContent.trim() : null
-    if (formItemLabelText && _isButtonElement(element)) {
+    if (appendButtonName && formItemLabelText && _isButtonElement(element)) {
       var btnName = _getButtonOwnName(element)
       if (btnName) {
         return formItemLabelText + ' ' + btnName
@@ -107,6 +112,34 @@ function  getAttributeLabel(element){
    if (title && title.trim()) return title.trim();
    if (label && label.trim()) return label.trim();
   return  null;
+}
+
+/**
+ * 获取页面原始标签文本。
+ * 与 propertiesName 使用相同的查找优先级，但不拼接按钮名称等识别文本。
+ */
+function getRealLabelByElement(element) {
+  try {
+    if (!element) return null
+    const strategies = [
+      () => getLabelByFor(element),
+      () => getWrappingLabel(element, false),
+      () => getAriaLabel(element),
+      () => getAttributeLabel(element),
+      () => getPlaceHolderLabel(element),
+      () => getDataAttributesLabel(element),
+      () => getTextContentLabel(element)
+    ]
+
+    for (const strategy of strategies) {
+      const result = strategy()
+      if (result) return result.replace(/\s+/g, ' ').replace(/[\r\n\t]/g, '')
+    }
+    return null
+  } catch (error) {
+    console.error('获取真实标签时出错:', error)
+    return null
+  }
 }
 
 //找占位符中的label

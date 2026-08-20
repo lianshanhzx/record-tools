@@ -24,9 +24,9 @@ const PageElementScannerController = (function () {
 
   const config = {
     // 变化触发后等待多久再扫描，避免连续变化导致重复扫描
-    debounceMs: 2000,
+    debounceMs: 350,
     // 两次扫描之间的最小间隔
-    minIntervalMs: 2000,
+    minIntervalMs: 500,
     // 按钮点击后多久内的 DOM 变化会被视为由该按钮触发
     triggerMaxAgeMs: 1500,
     // 路由轮询及新页面渲染稳定等待
@@ -42,7 +42,7 @@ const PageElementScannerController = (function () {
       childList: true,
       subtree: true,
       attributes: true,
-      attributeFilter: ['class', 'style', 'hidden']
+      attributeFilter: ['class', 'style', 'hidden', 'aria-hidden', 'aria-expanded', 'aria-selected', 'open', 'inert']
     }
   }
 
@@ -349,6 +349,30 @@ const PageElementScannerController = (function () {
     })
   }
 
+  function normalizeRootContexts(contexts) {
+    const byElement = new Map()
+    ;(contexts || []).forEach(context => {
+      const element = context && (context.element || (context.nodeType === Node.ELEMENT_NODE ? context : null))
+      if (!element || !element.isConnected) return
+      const existing = byElement.get(element)
+      const anchorEligible = context.element ? !!context.anchorEligible : true
+      if (existing) existing.anchorEligible = existing.anchorEligible || anchorEligible
+      else byElement.set(element, { element: element, anchorEligible: anchorEligible })
+    })
+
+    const distinct = Array.from(byElement.values())
+    return distinct.filter(context => {
+      if (context.anchorEligible) {
+        // 嵌套页签/折叠只扫描一次外层业务区域，避免重复又不遗漏同弹窗的兄弟字段。
+        return !distinct.some(other =>
+          other !== context && other.anchorEligible && other.element.contains(context.element))
+      }
+      // 普通动态区域不能覆盖显著区域，同类区域保留最小扫描范围。
+      return !distinct.some(other =>
+        other !== context && context.element.contains(other.element))
+    })
+  }
+
   /**
    * 返回待扫描区域中元素应使用的锚点上下文。
    * 仅在元素属于已识别的待扫描根节点，且触发按钮所在弹窗仍可见时返回；因此确认、
@@ -361,7 +385,7 @@ const PageElementScannerController = (function () {
       if (!root || !root.isConnected || typeof root.contains !== 'function') return false
       // 弹窗可能以包装器本身、内部内容节点或新加子节点作为 mutation root。
       // 两者存在包含关系都代表当前元素属于这轮待扫描区域。
-      return root.contains(element) || (typeof element.contains === 'function' && element.contains(root))
+      return root === element || root.contains(element)
     })
     if (!isInsidePendingRoot) return null
 
@@ -375,7 +399,7 @@ const PageElementScannerController = (function () {
    * 克隆扫描信息，删除内部 DOM 引用和位置缓存，避免被序列化到 JSON。
    * 保留 anchorTarget / anchorPropertiesName 供 popup 展示锚点关系。
    */
-  function cloneInfo(info) {
+  function cloneInfo(info, anchorNameByTarget) {
     const clone = Object.assign({}, info)
     delete clone._sourceElement
     delete clone._targetElement
@@ -383,13 +407,10 @@ const PageElementScannerController = (function () {
     delete clone._anchorElement
     if (info._anchorTarget) {
       clone.anchorTarget = info._anchorTarget
-      let anchorName = info._anchorPropertiesName || ''
-      for (const [targetEl, anchorInfo] of scannedElementMap) {
-        if (anchorInfo.pageKey === info.pageKey && anchorInfo.target === info._anchorTarget) {
-          anchorName = anchorInfo.propertiesName || anchorName
-          break
-        }
-      }
+      const anchorKey = (info.pageKey || '') + '\n' + info._anchorTarget
+      const anchorName = anchorNameByTarget && anchorNameByTarget.get(anchorKey)
+        ? anchorNameByTarget.get(anchorKey)
+        : info._anchorPropertiesName || ''
       clone.anchorPropertiesName = anchorName
     }
     delete clone._anchorTarget
@@ -408,16 +429,32 @@ const PageElementScannerController = (function () {
    */
   function updatePublicArray() {
     const entries = Array.from(scannedElementMap.entries())
+    const anchorNameByTarget = new Map()
+
+    entries.forEach(entry => {
+      const info = entry[1]
+      if (info.target && !info._anchorTarget) {
+        anchorNameByTarget.set((info.pageKey || '') + '\n' + info.target, info.propertiesName || '')
+      }
+    })
 
     // 刷新位置缓存与公开坐标：页面滚动/元素移动后，使用当前真实位置排序和标注。
     entries.forEach(entry => {
       const info = entry[1]
       try {
         if (info._targetElement && info._targetElement.isConnected) {
-          info._rect = info._targetElement.getBoundingClientRect()
-          if (typeof PageElementScanner !== 'undefined' && typeof PageElementScanner.getPagePosition === 'function') {
-            info.position = PageElementScanner.getPagePosition(info._targetElement)
+          const viewportRect = info._targetElement.getBoundingClientRect()
+          info._rect = viewportRect
+          const scrollX = window.scrollX || window.pageXOffset || 0
+          const scrollY = window.scrollY || window.pageYOffset || 0
+          const rect = {
+            x1: viewportRect.left + scrollX,
+            y1: viewportRect.top + scrollY,
+            x2: viewportRect.right + scrollX,
+            y2: viewportRect.bottom + scrollY
           }
+          info.rect = rect
+          info.position = rect
         }
       } catch (e) {}
     })
@@ -438,7 +475,7 @@ const PageElementScannerController = (function () {
     visualSorted.forEach((entry, idx) => {
       const info = entry[1]
       if (info.target) targetToBaseIndex.set((info.pageKey || '') + '\n' + info.target, idx)
-      idToBaseIndex.set(info.id, idx)
+      idToBaseIndex.set(info.propertiesID, idx)
     })
 
     // 阶段 2：按锚点目标分组，计算每个锚点组内的子序号（保持视觉顺序）
@@ -454,15 +491,15 @@ const PageElementScannerController = (function () {
     })
     anchorGroups.forEach(items => {
       items.forEach((item, idx) => {
-        anchorSubIndexMap.set(item[1].id, idx)
+        anchorSubIndexMap.set(item[1].propertiesID, idx)
       })
     })
 
     // 阶段 3：最终排序键 [锚点基础序或自身基础序, 是否有锚点, 子序号或自身基础序]
     entries.sort((a, b) => {
       const infoA = a[1], infoB = b[1]
-      const baseA = idToBaseIndex.get(infoA.id)
-      const baseB = idToBaseIndex.get(infoB.id)
+      const baseA = idToBaseIndex.get(infoA.propertiesID)
+      const baseB = idToBaseIndex.get(infoB.propertiesID)
       const anchorKeyA = (infoA.pageKey || '') + '\n' + infoA._anchorTarget
       const anchorKeyB = (infoB.pageKey || '') + '\n' + infoB._anchorTarget
       const anchorBaseA = infoA._anchorTarget && targetToBaseIndex.has(anchorKeyA)
@@ -471,10 +508,10 @@ const PageElementScannerController = (function () {
         ? targetToBaseIndex.get(anchorKeyB) : null
 
       const keyA = anchorBaseA !== null
-        ? [anchorBaseA, 1, anchorSubIndexMap.get(infoA.id)]
+        ? [anchorBaseA, 1, anchorSubIndexMap.get(infoA.propertiesID)]
         : [baseA, 0, baseA]
       const keyB = anchorBaseB !== null
-        ? [anchorBaseB, 1, anchorSubIndexMap.get(infoB.id)]
+        ? [anchorBaseB, 1, anchorSubIndexMap.get(infoB.propertiesID)]
         : [baseB, 0, baseB]
 
       for (let i = 0; i < 3; i++) {
@@ -489,7 +526,7 @@ const PageElementScannerController = (function () {
     })
 
     if (typeof Recorder !== 'undefined') {
-      Recorder.scannedPageElements = entries.map(([_, info]) => cloneInfo(info))
+      Recorder.scannedPageElements = entries.map(([_, info]) => cloneInfo(info, anchorNameByTarget))
     }
   }
 
@@ -685,6 +722,7 @@ const PageElementScannerController = (function () {
 
       const contextKey = makeContextKey(info.pageKey, info.target, info._anchorTarget)
       const oldInfo = scannedElementMap.get(contextKey)
+      if (oldInfo && oldInfo.propertiesID) info.propertiesID = oldInfo.propertiesID
       if (oldInfo && oldInfo._anchorTarget && !info._anchorTarget) {
         info._anchorTarget = oldInfo._anchorTarget
         info._anchorPropertiesName = oldInfo._anchorPropertiesName
@@ -704,7 +742,7 @@ const PageElementScannerController = (function () {
 
   /**
    * 扫描一个或多个变化区域，并增量合并。
-   * @param {Element[]} roots 变化区域根节点数组
+   * @param {Array<{element: Element, anchorEligible: boolean}>} roots 变化区域上下文
    * @param {Element|null} [anchorElement] 触发本次变化的按钮类元素（可选）
    */
   async function scanRegions(roots, anchorElement = null) {
@@ -727,17 +765,15 @@ const PageElementScannerController = (function () {
       return
     }
 
-    const visibleRoots = roots.filter(isVisibleElement)
+    const visibleRoots = normalizeRootContexts(roots).filter(context => isVisibleElement(context.element))
     if (visibleRoots.length === 0) {
       pendingScanAnchor = null
       return
     }
 
     notifyScanStatus('scanning', getScannedElementCount())
-    const overlayVersion = await beginScanOverlay()
-    if (overlayVersion === null) return
 
-    try {
+    {
       // 解析锚点信息
       let anchorTarget = null
       let anchorPropertiesName = null
@@ -750,45 +786,31 @@ const PageElementScannerController = (function () {
       }
 
       const allResults = []
-      const actualRoots = []
 
-      for (const root of visibleRoots) {
+      for (const rootContext of visibleRoots) {
+        const root = rootContext.element
+        // 多个独立区域之间主动让出主线程，避免连续同步扫描造成长时间无响应。
+        if (allResults.length > 0) await new Promise(resolve => setTimeout(resolve, 0))
         const results = scanRoot(root)
-
-        if (results.length > 0) {
-          allResults.push(...results)
-          actualRoots.push(root)
-        } else if (root.parentElement &&
-                   root.parentElement !== document.body &&
-                   root.parentElement !== document.documentElement) {
-          const parent = root.parentElement
-          // 避免同一个父节点被多次扫描
-          if (!actualRoots.includes(parent)) {
-            const parentResults = scanRoot(parent)
-            if (parentResults.length > 0) {
-              allResults.push(...parentResults)
-              actualRoots.push(parent)
+        results.forEach(info => {
+          if (anchorTarget && rootContext.anchorEligible && info.target !== anchorTarget && !info._anchorTarget) {
+            const targetElement = info._targetElement
+            if (targetElement && (targetElement === root || root.contains(targetElement))) {
+              info._anchorTarget = anchorTarget
+              info._anchorPropertiesName = anchorPropertiesName || ''
             }
           }
-        }
+          allResults.push(info)
+        })
       }
 
-      if (actualRoots.length === 0) {
+      if (allResults.length === 0) {
         notifyScanStatus('completed', getScannedElementCount())
         pendingScanAnchor = null
         return
       }
 
-      // 为本次新扫描到的元素标记锚点（首次为准，已存在锚点的元素不会被覆盖）
-      if (anchorTarget) {
-        allResults.forEach(info => {
-          if (info.target === anchorTarget) return
-          if (!info._anchorTarget) {
-            info._anchorTarget = anchorTarget
-            info._anchorPropertiesName = anchorPropertiesName || ''
-          }
-        })
-      } else if (anchorElement) {
+      if (!anchorTarget && anchorElement) {
         console.warn('[ScannerController] 存在触发按钮但未能解析为有效锚点:', anchorElement)
       }
 
@@ -796,8 +818,6 @@ const PageElementScannerController = (function () {
       notifyScanStatus('completed', count)
       pendingScanAnchor = null
       lastScanTime = Date.now()
-    } finally {
-      endScanOverlay(overlayVersion)
     }
   }
 
@@ -878,9 +898,17 @@ const PageElementScannerController = (function () {
    * 排除规则：组件自身的弹窗面板（日期面板、下拉选项、树选择面板等）不触发扫描。
    */
   function findAffectedRoots(mutations) {
-    const roots = new Set()
+    const roots = new Map()
     const suppressPassiveChange = isPassiveLayoutChange()
     const allowActiveAncestor = hasRecentUiActivation()
+    function addRoot(element, anchorEligible) {
+      if (!element || isInPopupPanel(element)) return
+      const existing = roots.get(element)
+      roots.set(element, {
+        element: element,
+        anchorEligible: !!anchorEligible || !!(existing && existing.anchorEligible)
+      })
+    }
     for (const m of mutations) {
       if (m.type === 'childList') {
         m.addedNodes.forEach(node => {
@@ -889,27 +917,28 @@ const PageElementScannerController = (function () {
           for (const root of candidates) {
             const newlyVisible = updateSignificantRootState(root)
             if (!suppressPassiveChange && (newlyVisible || (allowActiveAncestor && root.contains(node)))) {
-              roots.add(root)
+              addRoot(root, true)
             }
+          }
+          if (!suppressPassiveChange && candidates.size === 0 && containsScannableElement(node) && !isInPopupPanel(node)) {
+            addRoot(resolvePendingScanRoot(node), false)
           }
         })
       } else if (m.type === 'attributes') {
         const target = m.target
         if (!target || target.nodeType !== Node.ELEMENT_NODE) continue
-        const candidates = findSignificantRoots(target, false)
+        const candidates = findSignificantRoots(target, allowActiveAncestor)
         for (const root of candidates) {
           const newlyVisible = updateSignificantRootState(root)
-          if (!suppressPassiveChange && newlyVisible) roots.add(root)
+          if (!suppressPassiveChange && newlyVisible) addRoot(root, true)
+        }
+        if (!suppressPassiveChange && candidates.size === 0 && containsScannableElement(target) && !isInPopupPanel(target)) {
+          addRoot(resolvePendingScanRoot(target), false)
         }
       }
     }
 
-    const uniqueRoots = Array.from(roots)
-    return uniqueRoots
-      .filter((root, _, arr) => {
-        return !arr.some(other => other !== root && other.contains(root))
-      })
-      .filter(root => !isInPopupPanel(root))
+    return normalizeRootContexts(Array.from(roots.values()))
   }
 
   /**
@@ -942,23 +971,35 @@ const PageElementScannerController = (function () {
       '.tabs', '.tab-pane', '.tab-content', '.tab-item',
       '[role="tabpanel"]'
   ]
+  const significantSelector = significantSelectors.join(',')
+
+  const scannableSelector = [
+    'input:not([type="hidden"])', 'textarea', 'select',
+    '.el-select', '.el-date-editor', '.tsscdatepicker', '.el-radio', '.el-checkbox',
+    'button', 'a', '[role="button"]', '.el-button'
+  ].join(',')
+
+  function containsScannableElement(element) {
+    if (!element || typeof element.matches !== 'function') return false
+    try {
+      return element.matches(scannableSelector) || !!element.querySelector(scannableSelector)
+    } catch (e) {
+      return false
+    }
+  }
 
   /** 返回节点自身、内部以及主动操作时所属的显著扫描容器。 */
   function findSignificantRoots(element, includeAncestor) {
     const roots = new Set()
     if (!element || typeof element.matches !== 'function') return roots
-    for (const selector of significantSelectors) {
-      try {
-        if (element.matches(selector)) roots.add(element)
-        element.querySelectorAll?.(selector).forEach(root => roots.add(root))
-        if (includeAncestor) {
-          const ancestor = element.closest(selector)
-          if (ancestor) roots.add(ancestor)
-        }
-      } catch (e) {
-        // 无效选择器跳过
+    try {
+      if (element.matches(significantSelector)) roots.add(element)
+      element.querySelectorAll?.(significantSelector).forEach(root => roots.add(root))
+      if (includeAncestor) {
+        const ancestor = element.closest(significantSelector)
+        if (ancestor) roots.add(ancestor)
       }
-    }
+    } catch (e) {}
     return roots
   }
 
@@ -971,15 +1012,11 @@ const PageElementScannerController = (function () {
   }
 
   function rememberSignificantRootStates() {
-    for (const selector of significantSelectors) {
-      try {
-        document.querySelectorAll(selector).forEach(root => {
-          significantRootState.set(root, isVisibleElement(root))
-        })
-      } catch (e) {
-        // 无效选择器跳过
-      }
-    }
+    try {
+      document.querySelectorAll(significantSelector).forEach(root => {
+        significantRootState.set(root, isVisibleElement(root))
+      })
+    } catch (e) {}
   }
 
   /**
@@ -1041,14 +1078,11 @@ const PageElementScannerController = (function () {
       }
     }
 
-    updatePendingScanAnchor(roots)
+    updatePendingScanAnchor(roots.filter(context => context.anchorEligible).map(context => context.element))
 
     clearTimeout(debounceTimer)
     debounceTimer = setTimeout(() => {
-      // 对累积的所有 roots 做一次去重
-      const uniqueRoots = pendingRoots.filter((root, _, arr) => {
-        return !arr.some(other => other !== root && other.contains(root))
-      })
+      const uniqueRoots = normalizeRootContexts(pendingRoots)
       pendingRoots = []
       let trigger = getRecentTrigger()
       if (trigger && !isAnchorDialogVisible(trigger)) {
@@ -1083,11 +1117,12 @@ const PageElementScannerController = (function () {
       '.el-tabs__item, .ant-tabs-tab, .ivu-tabs-tab, .tab-item, ' +
       '.el-collapse-item__header, .ant-collapse-header, .ivu-collapse-header, .collapse-header'
     )
-    if (uiControl) lastUiActivationTime = Date.now()
+    if (event.isTrusted || uiControl) lastUiActivationTime = Date.now()
     let triggerEl = null
     if (typeof PageElementScanner !== 'undefined' && typeof PageElementScanner.resolveButtonRoot === 'function') {
       triggerEl = PageElementScanner.resolveButtonRoot(target)
     }
+    triggerEl = triggerEl || uiControl
     if (triggerEl) {
       lastTrigger = { element: triggerEl, time: Date.now(), active: false }
     }

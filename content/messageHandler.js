@@ -217,12 +217,12 @@ function getScreenshotElementRects() {
   const items = state && Array.isArray(state.items) ? state.items : []
   return items.map(item => {
     const target = getScreenshotVisualElement(resolveScreenshotXPath(item.target))
-    if (!target || !target.isConnected) return { id: item.id, status: 'target-not-found' }
+    if (!target || !target.isConnected) return { propertiesID: item.propertiesID, status: 'target-not-found' }
     const rect = target.getBoundingClientRect()
     const visible = rect.width > 0 && rect.height > 0 && rect.right > 0 && rect.bottom > 0 &&
       rect.left < window.innerWidth && rect.top < window.innerHeight
     return {
-      id: item.id,
+      propertiesID: item.propertiesID,
       status: visible ? 'visible' : 'not-visible',
       rect: {
         left: rect.left,
@@ -316,8 +316,15 @@ function getScreenshotTargetMetrics() {
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   // 开始/恢复录制 → 调用 content.js → startRecordEvent
   if (request.type === 'start' || request.type === 'startRecording') {
-    startRecordEvent();
-    sendResponse({ status: 'started' });
+    const initialize = typeof PageElementScannerController !== 'undefined'
+      ? PageElementScannerController.onPopupOpened()
+      : Promise.resolve()
+    initialize.then(() => {
+      startRecordEvent()
+      sendResponse({ status: 'started' })
+    }).catch(error => {
+      sendResponse({ status: 'startFailed', error: error.message })
+    })
     return true;
   }
   // 获取开始录制时扫描到的页面元素 → 读取 Recorder.scannedPageElements
@@ -330,7 +337,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     const root = document.documentElement
     const target = getScreenshotScrollTarget(request.groupContext)
     const items = request.groupContext && Array.isArray(request.groupContext.items)
-      ? request.groupContext.items.filter(item => item && item.id && item.target)
+      ? request.groupContext.items.filter(item => item && item.propertiesID && item.target)
       : []
     const boundaryItems = request.groupContext && Array.isArray(request.groupContext.boundaryItems)
       ? request.groupContext.boundaryItems.filter(item => item && item.target)
@@ -452,28 +459,33 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             }
           } catch (e) {}
           // 调用 messageHandler.js → sendBackMessage
-          const commandByAction = {
-            fill_form_field: 'input',
-            fill_date_field: 'fill_date_field',
-            select_option: 'select',
-            select_tree_option: 'select_tree_option',
-            click_element_by_index: 'click'
-          }
+          const eventTypeValue = Utils.normalizeEventType(r.action)
+          const target = xpath || ('label="' + r.label + '"')
+          const rect = el && typeof PageElementScanner !== 'undefined' && typeof PageElementScanner.getPagePosition === 'function'
+            ? PageElementScanner.getPagePosition(el)
+            : {}
           chrome.runtime.sendMessage({
             type: 'addActionData',
             data: {
-              command: commandByAction[r.action] || r.action,
-              target: xpath || ('label="' + r.label + '"'),
-              targetType: xpath ? 'xpath' : 'label',
+              eventTypeValue: eventTypeValue,
+              eventTypeName: Utils.getEventTypeName(eventTypeValue),
+              target: target,
+              mothed: 'By.XPATH',
+              elementType: target,
+              transcationType: 'playwright',
               tagName: el ? el.tagName.toLowerCase() : 'input',
-              value: r.value || '',
+              objectValue: r.value || '',
               propertiesName: r.label || '',
+              realLabel: el && typeof getRealLabelByElement !== 'undefined'
+                ? (getRealLabelByElement(el) || '')
+                : '',
+              rect: rect,
               group: group,
               pageKey: pageContext ? pageContext.key : '',
               pageUrl: pageContext ? pageContext.url : window.location.href,
               routeIdentity: pageContext ? pageContext.routeIdentity : '',
               pageOrder: pageContext ? pageContext.pageOrder : 0,
-              id: AutoFormFill._uuid(),
+              propertiesID: AutoFormFill._uuid(),
               timestamp: Date.now(),
               attributes: { value: r.value || '', type: 'ATTRIBUTE' }
             }

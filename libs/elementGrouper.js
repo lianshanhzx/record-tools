@@ -54,7 +54,7 @@ const ElementGrouper = (function () {
     const routeIdentity = getRouteIdentity(window.location)
     return {
       type: 'page',
-      name: '主页面',
+      propertiesName: '主页面',
       key: PAGE_GROUP_KEY + ':' + encodeURIComponent(routeIdentity),
       fixedKey: true,
       url: window.location.href,
@@ -234,7 +234,7 @@ const ElementGrouper = (function () {
    * 获取容器节点的分组信息（带缓存）。
    * @param {Element} container 分组容器节点
    * @param {string} type 容器类型
-   * @returns {{type: string, name: string, key: string}} 分组节点描述
+   * @returns {{type: string, propertiesName: string, key: string}} 分组节点描述
    */
   function getContainerInfo(container, type) {
     let info = containerCache.get(container)
@@ -249,7 +249,7 @@ const ElementGrouper = (function () {
       }
       info = {
         type: type,
-        name: name || GROUP_TYPE_LABELS[type] || '分组',
+        propertiesName: name || GROUP_TYPE_LABELS[type] || '分组',
         key: makeContainerKey(container, type)
       }
       containerCache.set(container, info)
@@ -265,7 +265,7 @@ const ElementGrouper = (function () {
    * 路径第一层始终为当前路由对应的"主页面"，其后追加 DOM 容器分组。
    *
    * @param {Element} element 目标元素
-   * @returns {Array<{type: string, name: string, key: string}>} 分组路径
+   * @returns {Array<{type: string, propertiesName: string, key: string}>} 分组路径
    */
   function getGroupPath(element) {
     const page = getCurrentPageContext()
@@ -277,7 +277,7 @@ const ElementGrouper = (function () {
       if (type) {
         // 直接取缓存中的字段副本，避免外部修改污染缓存
         const info = getContainerInfo(node, type)
-        path.unshift({ type: info.type, name: info.name, key: info.key })
+        path.unshift({ type: info.type, propertiesName: info.propertiesName, key: info.key })
       }
       node = node.parentElement
     }
@@ -290,7 +290,7 @@ const ElementGrouper = (function () {
    * 将带有 group 分组路径的扁平列表构建为树形结构（popup 侧调用，纯函数）。
    *
    * 返回节点结构：
-   *   { key, type, name, children: [子组节点...], items: [原始记录...] }
+   *   { key, type, propertiesName, children: [子组节点...], items: [原始记录...] }
    *
    * 规则：
    *   - group 为空的记录归入"主页面"默认组（type: 'page'）
@@ -305,13 +305,13 @@ const ElementGrouper = (function () {
     const nodeMap = new Map()
 
     ;(items || []).forEach(item => {
-      const path = Array.isArray(item.group) ? item.group.filter(g => g && (g.key || g.name)) : []
+      const path = Array.isArray(item.group) ? item.group.filter(g => g && (g.key || g.propertiesName)) : []
 
       // 无分组信息 → 归入"主页面"默认组
       if (path.length === 0) {
         let pageNode = nodeMap.get(PAGE_GROUP_KEY)
         if (!pageNode) {
-          pageNode = { key: PAGE_GROUP_KEY, type: 'page', name: '主页面', children: [], items: [] }
+          pageNode = { key: PAGE_GROUP_KEY, type: 'page', propertiesName: '主页面', children: [], items: [] }
           nodeMap.set(PAGE_GROUP_KEY, pageNode)
           roots.push(pageNode)
         }
@@ -324,13 +324,13 @@ const ElementGrouper = (function () {
       let prefix = ''
       let deepest = null
       path.forEach(g => {
-        const nodeKey = prefix + '|' + (g.type || '') + ':' + (g.key || g.name)
+        const nodeKey = prefix + '|' + (g.type || '') + ':' + (g.key || g.propertiesName)
         let node = nodeMap.get(nodeKey)
         if (!node) {
           node = {
             key: nodeKey,
             type: g.type || 'group',
-            name: g.name || '分组',
+            propertiesName: g.propertiesName || '分组',
             children: [],
             items: []
           }

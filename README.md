@@ -410,6 +410,58 @@ Popup (uploadService.js)
 
 ### 场景 F：元素扫描与下载
 
+扫描、人工录制以及下载 JSON 使用同一套对接字段：
+
+| 字段 | 说明 |
+| --- | --- |
+| `propertiesID` | 元素或分组的 UUID |
+| `propertiesPID` | 父分组的 `propertiesID` |
+| `propertiesName` | 元素业务名称或分组实际名称 |
+| `eventTypeValue` | `click` / `input` / `select` / `fill_date_field` / `select_tree_option` |
+| `eventTypeName` | 点击 / 输入 / 选择 / 日期 / 树选择 |
+| `elementType` | 元素记录取 `target`，分组固定为空字符串 |
+| `mothed` | 元素固定为 `By.XPATH`，分组固定为空字符串 |
+| `objectValue` | 原元素 `value` 字段 |
+| `transcationType` | 固定为 `playwright` |
+| `realLabel` | 按关联 label、上层表单项、ARIA、属性等页面原始信息提取，不追加识别后缀；分组固定为空字符串 |
+| `rect` | 元素位置，格式为 `{ x1, y1, x2, y2 }`；分组固定为空对象 |
+
+`propertiesName` 用于业务识别，允许追加按钮文本或人工去重后缀；`realLabel` 只保留页面标签查找链路得到的原始文本，不追加这些识别内容。
+
+下载结果中的分组节点使用随机 UUID，并通过 `propertiesPID` 关联父分组。内部用于 XPath、截图和折叠状态的分组 `key` 不作为分组 ID。分组节点固定包含以下对接字段：
+
+```json
+{
+  "propertiesID": "<uuid>",
+  "propertiesPID": null,
+  "propertiesName": "主页面",
+  "eventTypeValue": "click",
+  "eventTypeName": "点击",
+  "elementType": "",
+  "mothed": "",
+  "options": "",
+  "objectValue": "",
+  "transcationType": "playwright",
+  "realLabel": "",
+  "regionId": "",
+  "regionLabel": "",
+  "rect": {}
+}
+```
+
+元素的 `rect` 中，`x1/y1` 表示左上角位置，`x2/y2` 表示右下角位置：
+
+```json
+{
+  "rect": {
+    "x1": 100,
+    "y1": 200,
+    "x2": 300,
+    "y2": 240
+  }
+}
+```
+
 #### F1. 获取已扫描元素
 
 ```

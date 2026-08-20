@@ -163,7 +163,7 @@ const ScreenshotService = {
       pageInfo.maxScrollY = maxScrollY
       const stitched = await this.stitch(captures, pageInfo, groupNode.captureItems || [])
       const blob = stitched.blob
-      const filename = this.buildFilename(groupNode.name)
+      const filename = this.buildFilename(groupNode.propertiesName)
       const blobUrl = URL.createObjectURL(blob)
       const downloadId = await chrome.downloads.download({
         url: blobUrl,
@@ -241,14 +241,14 @@ const ScreenshotService = {
     canvas.height = height
     const context = canvas.getContext('2d')
     const itemStatuses = new Map()
-    ;(captureItems || []).forEach(item => itemStatuses.set(item.id, 'target-not-found'))
+    ;(captureItems || []).forEach(item => itemStatuses.set(item.propertiesID, 'target-not-found'))
     const elementBoxes = new Map()
 
     function rememberStatus(elementInfo) {
-      if (!elementInfo || !elementInfo.id) return
-      const current = itemStatuses.get(elementInfo.id)
+      if (!elementInfo || !elementInfo.propertiesID) return
+      const current = itemStatuses.get(elementInfo.propertiesID)
       if (elementInfo.status === 'visible' || current === 'target-not-found') {
-        itemStatuses.set(elementInfo.id, elementInfo.status || current)
+        itemStatuses.set(elementInfo.propertiesID, elementInfo.status || current)
       }
     }
 
@@ -260,7 +260,7 @@ const ScreenshotService = {
       ;(capture.elementRects || []).forEach(elementInfo => {
         rememberStatus(elementInfo)
         const rect = elementInfo.rect
-        if (!rect || elementBoxes.has(elementInfo.id)) return
+        if (!rect || elementBoxes.has(elementInfo.propertiesID)) return
         const elementLeft = rect.left * scale
         const elementTop = rect.top * scale
         const elementRight = rect.right * scale
@@ -273,7 +273,7 @@ const ScreenshotService = {
         const logicalTop = currentRect
           ? (captureRect.top + capture.y + rect.top - currentRect.top) * scale
           : (capture.y + rect.top) * scale
-        elementBoxes.set(elementInfo.id, {
+        elementBoxes.set(elementInfo.propertiesID, {
           left: logicalLeft,
           top: logicalTop,
           width: rect.width * scale,
@@ -382,7 +382,7 @@ const ScreenshotService = {
       ;(captures[0].elementRects || []).forEach(elementInfo => {
         rememberStatus(elementInfo)
         const rect = elementInfo.rect
-        if (!rect || elementBoxes.has(elementInfo.id)) return
+        if (!rect || elementBoxes.has(elementInfo.propertiesID)) return
         const left = rect.left * scale
         const top = rect.top * scale
         const right = rect.right * scale
@@ -390,18 +390,18 @@ const ScreenshotService = {
         const insideScrollingContent = left >= rectLeft && right <= rectRight && top >= rectTop && bottom <= rectBottom
         if (!insideScrollingContent && left >= 0 && top >= 0 && right <= width && bottom <= captures[0].image.naturalHeight) {
           const movedTop = top >= rectBottom ? top + pageInfo.maxScrollY * scale : top
-          elementBoxes.set(elementInfo.id, { left, top: movedTop, width: rect.width * scale, height: rect.height * scale })
+          elementBoxes.set(elementInfo.propertiesID, { left, top: movedTop, width: rect.width * scale, height: rect.height * scale })
         }
       })
     }
 
     const positions = {}
     ;(captureItems || []).forEach(item => {
-      const box = elementBoxes.get(item.id)
+      const box = elementBoxes.get(item.propertiesID)
       const completeBox = box && box.left >= 0 && box.top >= 0 &&
         box.left + box.width <= width && box.top + box.height <= height
-      const itemStatus = itemStatuses.get(item.id)
-      positions[item.id] = completeBox
+      const itemStatus = itemStatuses.get(item.propertiesID)
+      positions[item.propertiesID] = completeBox
         ? {
             x: box.left / width,
             y: box.top / height,

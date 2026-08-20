@@ -292,7 +292,7 @@
     <header class="topbar">
       <div class="title-block">
         <h1>截图元素标记测试</h1>
-        <div class="subtitle">同一时间只能勾选同一个直接分组内的多个元素</div>
+        <div class="subtitle">使用 propertiesID/propertiesPID 构建分组，按 rect 的 x1/y1/x2/y2 标记元素</div>
       </div>
 
       <label class="file-control">
@@ -339,6 +339,14 @@
     (function () {
       'use strict'
 
+      // 截图元素标记测试页：加载 record-tools 导出的 JSON 分组协议，
+      // 通过 propertiesID/propertiesPID 还原分组树，并将元素 rect（x1/y1/x2/y2）绘制到分组截图画布上。
+      // 期望的节点字段：
+      //   分组：type + propertiesID + propertiesPID + propertiesName + screenshots[]
+      //   元素：type='ele' + propertiesID + propertiesPID + propertiesName + realLabel
+      //         + eventTypeName/eventTypeValue + rect { x1, y1, x2, y2 }（归一化坐标）
+
+      // 分组 type 对应的中文展示名
       const GROUP_TYPE_LABELS = {
         page: '主页',
         dialog: '弹窗',
@@ -362,17 +370,17 @@
       const canvas = document.getElementById('canvas')
       const context = canvas.getContext('2d')
 
-      let nodes = []
-      let nodeById = new Map()
-      let childrenByPid = new Map()
-      let collapsedGroups = new Set()
-      let selectedGroupId = ''
-      let selectedElementIds = new Set()
-      let loadedImage = null
-      let loadedImageGroupId = ''
-      let imageObjectUrl = ''
-      let imageLoadVersion = 0
-      let marksVisible = false
+      let nodes = []                      // 全量节点（分组 + 元素）扁平数组
+      let nodeById = new Map()            // propertiesID -> 节点
+      let childrenByPid = new Map()       // propertiesPID -> 直接子节点数组
+      let collapsedGroups = new Set()     // 已折叠的分组 ID 集合
+      let selectedGroupId = ''            // 当前勾选元素所在的直接分组 ID
+      let selectedElementIds = new Set()  // 当前勾选的元素 ID 集合
+      let loadedImage = null              // 当前画布上显示的 Image 对象
+      let loadedImageGroupId = ''         // 当前画布图片所属的分组 ID
+      let imageObjectUrl = ''             // 手动选择截图的 ObjectURL，用于回收
+      let imageLoadVersion = 0            // 自增版本号，用于取消过期的图片加载回调
+      let marksVisible = false            // 画布上是否显示元素标记
 
       function setStatus(message, type) {
         status.textContent = message
@@ -388,6 +396,7 @@
           .replace(/'/g, '&#39;')
       }
 
+      // 元素节点以 type === 'ele' 标识，其余（page/dialog 等）视为分组
       function isElement(node) {
         return node && node.type === 'ele'
       }
@@ -396,27 +405,35 @@
         return node && !isElement(node)
       }
 
+      // 判定元素是否带有可用于标记的截图坐标：
+      // rect 四个角都必须是有穷数，且限制在 0..1 的归一化范围内，并形成正向面积矩形
       function hasPosition(node) {
-        const position = node && node.position
-        return !!position && position.coordinateType === 'normalized' &&
-          [position.x, position.y, position.width, position.height].every(Number.isFinite) &&
-          position.width > 0 && position.height > 0
+        const rect = node && node.rect
+        return !!rect && [rect.x1, rect.y1, rect.x2, rect.y2].every(Number.isFinite) &&
+          rect.x1 >= 0 && rect.y1 >= 0 && rect.x2 <= 1 && rect.y2 <= 1 &&
+          rect.x2 > rect.x1 && rect.y2 > rect.y1
       }
 
       function getElementType(node) {
-        return node.command || node.action || node.attr && node.attr.type || 'ele'
+        // 优先取中文事件名，其次取事件值
+        return node.eventTypeName || node.eventTypeValue || '元素'
       }
 
       function getElementName(node) {
-        return node.params && node.params.label_text || node.propertiesName || node.name || '未命名元素'
+        // 元素名称优先取 propertiesName，回退到按页面标签链路提取的 realLabel
+        return node.propertiesName || node.realLabel || '未命名元素'
       }
 
+      // 用 propertiesID/propertiesPID 建立节点索引与父子映射，
+      // 并在缺少 propertiesID 时直接抛错，避免渲染阶段产生错乱
       function buildIndexes(groups) {
         nodes = groups
-        nodeById = new Map(nodes.map(node => [String(node.id), node]))
+        const missingId = nodes.find(node => !node || !node.propertiesID)
+        if (missingId) throw new Error('groups 中存在缺少 propertiesID 的节点')
+        nodeById = new Map(nodes.map(node => [String(node.propertiesID), node]))
         childrenByPid = new Map()
         nodes.forEach(node => {
-          const pid = node.pid == null ? '' : String(node.pid)
+          const pid = node.propertiesPID == null ? '' : String(node.propertiesPID)
           if (!childrenByPid.has(pid)) childrenByPid.set(pid, [])
           childrenByPid.get(pid).push(node)
         })
@@ -426,15 +443,24 @@
         return childrenByPid.get(String(groupId)) || []
       }
 
+      // 指定分组下的直接元素（不含子分组）
       function getDirectElements(groupId) {
         return getChildren(groupId).filter(isElement)
       }
 
+      // 找出顶层分组：propertiesPID 为空或父节点不在索引中；
+      // 找不到时回退为全部分组，保证孤立分组也能渲染
       function getRootGroups() {
-        const roots = nodes.filter(node => isGroup(node) && (node.pid == null || !nodeById.has(String(node.pid))))
+        const roots = nodes.filter(node => isGroup(node) &&
+          (node.propertiesPID == null || !nodeById.has(String(node.propertiesPID))))
         return roots.length > 0 ? roots : nodes.filter(node => isGroup(node))
       }
 
+      // 将 JSON 中的截图路径解析为多个可尝试的候选 URL（按顺序尝试加载）：
+      //   1. 绝对地址（http/data/blob/file 协议）直接使用
+      //   2. 以 screenshots/ 结尾的路径，相对网页目录拼出 ../screenshots/...
+      //   3. 去掉开头的 /
+      //   4. 原样拼接到网页目录
       function getScreenshotCandidates(screenshotPath) {
         const value = String(screenshotPath || '').trim().replace(/\\/g, '/')
         if (!value) return []
@@ -461,10 +487,11 @@
         let html = ''
         let groupCount = 0
         let elementCount = 0
-        const rendered = new Set()
+        const rendered = new Set() // 防止同一分组因父子链异常被渲染多次
 
+        // 递归渲染单个分组及其直接元素，子分组继续递归
         function renderGroup(group, depth) {
-          const id = String(group.id)
+          const id = String(group.propertiesID)
           if (rendered.has(id)) return
           rendered.add(id)
           groupCount++
@@ -479,13 +506,13 @@
           html += '<div class="group-row' + (active ? ' active' : '') + '" data-group-id="' + escapeHtml(id) + '" style="padding-left:' + (12 + depth * 16) + 'px">'
           html += '<span class="arrow">' + (children.length > 0 ? (collapsed ? '▶' : '▼') : '') + '</span>'
           html += '<span class="group-type">' + escapeHtml(type) + '</span>'
-          html += '<span class="group-name" title="' + escapeHtml(group.name || '未命名分组') + '">' + escapeHtml(group.name || '未命名分组') + '</span>'
+          html += '<span class="group-name" title="' + escapeHtml(group.propertiesName || '未命名分组') + '">' + escapeHtml(group.propertiesName || '未命名分组') + '</span>'
           html += '</div>'
 
           if (collapsed) return
 
           elements.forEach(element => {
-            const elementId = String(element.id)
+            const elementId = String(element.propertiesID)
             const available = hasPosition(element)
             const selected = selectedElementIds.has(elementId)
             html += '<label class="element-row' + (selected ? ' selected' : '') + (available ? '' : ' unavailable') + '" style="padding-left:' + (32 + depth * 16) + 'px">'
@@ -499,10 +526,12 @@
         }
 
         getRootGroups().forEach(group => renderGroup(group, 0))
+        // 兜底：保证孤儿分组也能出现在树中
         nodes.filter(isGroup).forEach(group => renderGroup(group, 0))
         tree.innerHTML = html
         treeMeta.textContent = groupCount + ' 个分组，' + elementCount + ' 个元素'
 
+        // 分组行点击切换折叠状态
         tree.querySelectorAll('.group-row').forEach(row => {
           row.addEventListener('click', function () {
             const groupId = row.dataset.groupId
@@ -519,6 +548,7 @@
         })
       }
 
+      // 变更元素勾选状态：切换分组时先清空旧选择，保证同一时间只能多选同一直接分组的元素
       function changeElementSelection(groupId, elementId, checked) {
         // 切换到另一分组时清空旧选择，保证只能多选同一直接分组的元素。
         if (checked && selectedGroupId && selectedGroupId !== groupId) {
@@ -538,6 +568,7 @@
         renderTree()
         updateButtons()
         drawCanvas()
+        // 首次勾选该组元素时自动加载该分组的截图
         if (checked) loadGroupImage(groupId)
       }
 
@@ -550,6 +581,7 @@
         drawCanvas()
       }
 
+      // 切回占位提示，卸载当前画布
       function showPlaceholder(message) {
         loadedImage = null
         loadedImageGroupId = ''
@@ -560,6 +592,7 @@
         updateButtons()
       }
 
+      // 将图片应用到画布，并按图片原始尺寸校准画布大小
       function applyImage(image, groupId, label) {
         loadedImage = image
         loadedImageGroupId = groupId
@@ -574,6 +607,7 @@
         updateButtons()
       }
 
+      // 按候选 URL 顺序尝试加载截图；imageLoadVersion 保证过期请求被忽略
       function loadCandidates(candidates, groupId, label) {
         const version = ++imageLoadVersion
         let index = 0
@@ -598,6 +632,7 @@
         next()
       }
 
+      // 加载指定分组的首张 screenshots 截图；已加载同组图片则直接跳过
       function loadGroupImage(groupId) {
         if (loadedImage && loadedImageGroupId === groupId) return
         if (imageObjectUrl) {
@@ -612,16 +647,19 @@
           setStatus('当前分组没有截图地址。', 'error')
           return
         }
-        loadCandidates(getScreenshotCandidates(screenshot), String(groupId), group.name || group.type || '分组')
+        loadCandidates(getScreenshotCandidates(screenshot), String(groupId), group.propertiesName || group.type || '分组')
       }
 
+      // 在画布上绘制被勾选元素：用 rect 归一化坐标换算像素位置，
+      // 填充半透明红色块、红色描边，并叠加序号角标
       function drawCanvas() {
         if (!loadedImage) return
         context.clearRect(0, 0, canvas.width, canvas.height)
         context.drawImage(loadedImage, 0, 0, canvas.width, canvas.height)
         if (!marksVisible || loadedImageGroupId !== selectedGroupId) return
 
-        const selected = getDirectElements(selectedGroupId).filter(element => selectedElementIds.has(String(element.id)) && hasPosition(element))
+        const selected = getDirectElements(selectedGroupId).filter(element =>
+          selectedElementIds.has(String(element.propertiesID)) && hasPosition(element))
         const lineWidth = Math.max(3, Math.round(Math.min(canvas.width, canvas.height) / 500))
         const badgeSize = Math.max(20, lineWidth * 7)
         context.save()
@@ -631,11 +669,11 @@
         context.font = Math.max(14, lineWidth * 5) + 'px Arial'
 
         selected.forEach((element, index) => {
-          const position = element.position
-          const x = position.x * canvas.width
-          const y = position.y * canvas.height
-          const width = position.width * canvas.width
-          const height = position.height * canvas.height
+          const rect = element.rect
+          const x = rect.x1 * canvas.width
+          const y = rect.y1 * canvas.height
+          const width = (rect.x2 - rect.x1) * canvas.width
+          const height = (rect.y2 - rect.y1) * canvas.height
           const inset = lineWidth / 2
           context.fillRect(x, y, width, height)
           context.strokeRect(x + inset, y + inset, Math.max(0, width - lineWidth), Math.max(0, height - lineWidth))
@@ -653,6 +691,7 @@
         context.restore()
       }
 
+      // 按勾选状态与图片归属刷新按钮可用性
       function updateButtons() {
         const hasSelection = selectedElementIds.size > 0
         const correctImage = !!loadedImage && loadedImageGroupId === selectedGroupId
@@ -662,6 +701,7 @@
       }
 
       jsonFile.addEventListener('change', async function () {
+        // 读取并校验 JSON，成功后重建索引、清空旧状态并重新渲染
         const file = jsonFile.files && jsonFile.files[0]
         if (!file) return
         jsonLabel.textContent = file.name
@@ -686,6 +726,7 @@
       })
 
       imageFile.addEventListener('change', function () {
+        // 手动选择截图：必须先勾选元素，明确截图归属的分组
         const file = imageFile.files && imageFile.files[0]
         if (!file) return
         if (!selectedGroupId) {
@@ -701,7 +742,7 @@
         const image = new Image()
         image.onload = function () {
           const group = nodeById.get(groupId)
-          applyImage(image, groupId, group && (group.name || group.type) || '手动截图')
+          applyImage(image, groupId, group && (group.propertiesName || group.type) || '手动截图')
           setStatus('已加载手动选择的截图。', 'success')
         }
         image.onerror = function () {
@@ -712,6 +753,7 @@
       })
 
       highlightBtn.addEventListener('click', function () {
+        // 点亮标记：保持元素勾选状态，仅切换画布上的标记显示
         marksVisible = true
         drawCanvas()
         clearMarksBtn.disabled = false

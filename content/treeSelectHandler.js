@@ -122,7 +122,7 @@ const TreeSelectHandler = {
       return
     }
     this.pendingTreeSelect = {
-      id: action.id,
+      propertiesID: action.propertiesID,
       target: action.target,
       inputElement,
       valueBefore: inputElement.value || '',
@@ -194,17 +194,18 @@ const TreeSelectHandler = {
         return
       }
 
-      const actionIndex = Recorder.actions.findIndex(item => item.id === pending.id || item.target === pending.target)
+      const actionIndex = Recorder.actions.findIndex(item => item.propertiesID === pending.propertiesID || item.target === pending.target)
       if (actionIndex === -1) {
         this.pendingTreeSelect = null
         return
       }
 
       const action = Recorder.actions[actionIndex]
-      action.command = 'select_tree_option'
-      action.value = finalValue || selectedText
+      action.eventTypeValue = 'select_tree_option'
+      action.eventTypeName = Utils.getEventTypeName(action.eventTypeValue)
+      action.objectValue = finalValue || selectedText
       if (action.attributes) {
-        action.attributes.value = action.value
+        action.attributes.value = action.objectValue
       }
       Recorder.actions[actionIndex] = action
       this.lastTreeSelect = {

@@ -20,9 +20,41 @@ function uuid() {
   return s.join('')
 }
 
+/** 将历史命令/动作值归一为对接平台使用的事件类型。 */
+function normalizeEventType(value) {
+  switch (value) {
+    case 'click':
+    case 'click_element_by_index':
+      return 'click'
+    case 'select':
+    case 'selectOption':
+    case 'select_option':
+      return 'select'
+    case 'fill_date_field':
+      return 'fill_date_field'
+    case 'select_tree_option':
+      return 'select_tree_option'
+    case 'input':
+    case 'fill_form_field':
+    default:
+      return 'input'
+  }
+}
+
+/** 返回事件类型对应的中文说明。 */
+function getEventTypeName(value) {
+  switch (normalizeEventType(value)) {
+    case 'click': return '点击'
+    case 'select': return '选择'
+    case 'fill_date_field': return '日期'
+    case 'select_tree_option': return '树选择'
+    default: return '输入'
+  }
+}
+
 /**
  * 将平行节点数组转换为自动化平台 JSON 格式
- * @param {Array} groups 通过 id/pid 表达层级的分组和操作节点
+ * @param {Array} groups 通过 propertiesID/propertiesPID 表达层级的分组和操作节点
  * @param {string} url 录制页面 URL
  * @returns {string}
  */
@@ -55,7 +87,7 @@ function saveAsBlobFile(blob, name) {
 }
 
 // 支持 CommonJS 和浏览器全局变量两种导出方式
-const Utils = { uuid, actionTree2Json, txt2Blob, saveAsBlobFile }
+const Utils = { uuid, normalizeEventType, getEventTypeName, actionTree2Json, txt2Blob, saveAsBlobFile }
 
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = Utils

@@ -91,6 +91,7 @@ const RecordManager = {
         const existing = this.scannedElementList[index]
         const screenshotPosition = existing.screenshotPosition
         this.scannedElementList[index] = Object.assign({}, existing, incoming, {
+          propertiesID: existing.propertiesID,
           scanPosition: incoming.position || existing.scanPosition,
           screenshotPosition: screenshotPosition,
           position: screenshotPosition || incoming.position || existing.position,
@@ -157,16 +158,16 @@ const RecordManager = {
         : ''
 
       // 下拉框选项提示
-      let valText = item.value || ''
+      let valText = item.objectValue || ''
       let valTitle = valText
       if (item.options && item.options.length > 0) {
         valText = valText ? valText + '（' + item.options.length + '项）' : '（' + item.options.length + '项）'
-        valTitle = (item.value || '') + '\n选项：' + item.options.join(' / ')
+        valTitle = (item.objectValue || '') + '\n选项：' + item.options.join(' / ')
       }
 
       html += '<div class="list-row' + (isCut ? ' cut-pending' : '') + '" style="padding-left:' + indent + 'px" data-record-key="' + escHtml(recordKey) + '">'
       html += '<span class="col-seq">' + idx + '</span>'
-      html += '<span class="col-cmd">' + escHtml(item.command || '') + '</span>'
+      html += '<span class="col-cmd">' + escHtml(item.eventTypeName || '') + '</span>'
       html += '<span class="col-name" title="' + escHtml(name || '') + '">' + manualBadge + escHtml(name || '') + anchorBadge + '</span>'
       html += '<span class="col-target" title="' + escHtml(item.target || '') + '">'
       html += '<span class="col-target-text">' + escHtml(item.target || '') + '</span>'
@@ -187,19 +188,19 @@ const RecordManager = {
     /** 提取记录的 group 路径，过滤掉无 key 的脏分组项，返回有效的分组数组。 */
     function normalizePath(item) {
       return Array.isArray(item && item.group)
-        ? item.group.filter(g => g && (g.key || g.name))
+        ? item.group.filter(g => g && (g.key || g.propertiesName))
         : []
     }
 
-    /** 判断两个分组节点是否表示同一个组（type + key 都相同），key 缺失时回退比较 name。 */
+    /** 判断两个分组节点是否表示同一个组（type + key 都相同）。 */
     function sameGroup(a, b) {
-      return (a.type || '') === (b.type || '') && (a.key || a.name) === (b.key || b.name)
+      return (a.type || '') === (b.type || '') && (a.key || a.propertiesName) === (b.key || b.propertiesName)
     }
 
     // 兜底页面组：无分组信息的记录统一归入"主页面"。
     const pageGroup = {
       type: 'page',
-      name: '主页面',
+      propertiesName: '主页面',
       key: (typeof ElementGrouper !== 'undefined' && ElementGrouper.PAGE_GROUP_KEY) || '__page__',
       fixedKey: true
     }
@@ -239,9 +240,10 @@ const RecordManager = {
         // 同一弹窗组件可被多个按钮复用；首个相对分组加入锚点上下文，
         // 使 A/B 按钮各自拥有独立子分组，同时保持显示名称不变。
         return Object.assign({}, g, {
-          key: (g.key || g.name) + '@@anchor=' + item.anchorTarget
+          key: (g.key || g.propertiesName) + '@@anchor=' + item.anchorTarget
         })
       })
+      if (relativePath.length === 0) return ownPath.length > 0 ? ownPath : [pageGroup]
       return parentPath.concat(relativePath)
     }
 
@@ -257,7 +259,10 @@ const RecordManager = {
 
       // 先建立 target -> 记录 的索引，供 displayPath 反查锚点记录。
       ;(items || []).forEach(item => {
-        if (item.target) anchorByTarget.set((item.pageKey || '') + '\n' + item.target, item)
+        if (!item.target) return
+        const key = (item.pageKey || '') + '\n' + item.target
+        const existing = anchorByTarget.get(key)
+        if (!existing || (existing.anchorTarget && !item.anchorTarget)) anchorByTarget.set(key, item)
       })
 
       /**
@@ -270,14 +275,14 @@ const RecordManager = {
         let node = null
 
         path.forEach(g => {
-          const part = (g.type || 'group') + ':' + (g.key || g.name)
+          const part = (g.type || 'group') + ':' + (g.key || g.propertiesName)
           const nodeKey = g.fixedKey ? g.key : (parentKey ? parentKey + '|' + part : '|' + part)
           node = nodeMap.get(nodeKey)
           if (!node) {
             node = {
               key: nodeKey,
               type: g.type || 'group',
-              name: g.name || '分组',
+              propertiesName: g.propertiesName || '分组',
               url: g.url || '',
               path: parent ? parent.path.concat([g]) : [g],
               entries: [],
@@ -323,11 +328,11 @@ const RecordManager = {
         ? ' disabled'
         : ''
       const screenshotText = self.screenshotCaptureGroupKey === node.key ? self.screenshotCaptureText : '截图'
-      const groupTitle = node.type === 'page' && node.url ? node.name + ' - ' + node.url : node.name
+      const groupTitle = node.type === 'page' && node.url ? node.propertiesName + ' - ' + node.url : node.propertiesName
       html += '<div class="list-group-header group-type-' + escHtml(node.type) + '" data-group-key="' + escHtml(node.key) + '" style="padding-left:' + indent + 'px">'
       html += '<span class="group-arrow">' + (collapsed ? '▸' : '▾') + '</span>'
       html += '<span class="group-type-badge">' + escHtml(typeLabel) + '</span>'
-      html += '<span class="group-name" title="' + escHtml(groupTitle) + '">' + escHtml(node.name) + '</span>'
+      html += '<span class="group-name" title="' + escHtml(groupTitle) + '">' + escHtml(node.propertiesName) + '</span>'
       html += '<span class="group-count">' + node.count + ' 条</span>'
       html += '<button type="button" class="group-screenshot-list" data-group-key="' + escHtml(node.key) + '">截图 ' + screenshotCount + '</button>'
       html += '<button type="button" class="group-screenshot-btn" data-group-key="' + escHtml(node.key) + '"' + screenshotDisabled + '>' + escHtml(screenshotText) + '</button>'
@@ -395,7 +400,7 @@ const RecordManager = {
    * 判断记录是否为按钮类型。
    */
   isButtonRecord(item) {
-    return item.kind === 'button' || item.command === 'click'
+    return item.kind === 'button' || item.eventTypeValue === 'click'
   },
 
   /**
@@ -556,10 +561,15 @@ const RecordManager = {
       if (byTarget >= 0) {
         this.recordActionList[byTarget] = {
           ...this.recordActionList[byTarget],
-          value: message.data.value,
-          command: message.data.command,
+          objectValue: message.data.objectValue,
+          eventTypeValue: message.data.eventTypeValue,
+          eventTypeName: message.data.eventTypeName,
           propertiesName: message.data.propertiesName,
-          action: message.data.action,
+          realLabel: message.data.realLabel || this.recordActionList[byTarget].realLabel || '',
+          rect: message.data.rect || this.recordActionList[byTarget].rect || {},
+          mothed: message.data.mothed || 'By.XPATH',
+          elementType: message.data.target,
+          transcationType: 'playwright',
           group: message.data.group || this.recordActionList[byTarget].group,
           kind: message.data.kind || this.recordActionList[byTarget].kind,
           scanIndex: typeof message.data.scanIndex === 'number' ? message.data.scanIndex : this.recordActionList[byTarget].scanIndex,
@@ -607,25 +617,31 @@ const RecordManager = {
         const byTarget = this.findContextRecordIndex(target, el.anchorTarget, el.pageKey)
         if (byTarget >= 0) {
           // 已存在（可能是人工录制过、也可能是上次扫描的）：
-          // recorded 取"已有值或当前扫描可见性"的并集，人工状态不被扫描覆盖。
+          // 保留首次分配的 propertiesID，人工状态也不被扫描覆盖。
+          const existing = this.recordActionList[byTarget]
           this.recordActionList[byTarget] = {
-            ...this.recordActionList[byTarget],
-            command: el.command,
+            ...existing,
+            eventTypeValue: existing.manualRecord ? existing.eventTypeValue : el.eventTypeValue,
+            eventTypeName: existing.manualRecord ? existing.eventTypeName : el.eventTypeName,
             propertiesName: el.propertiesName,
-            action: el.action,
-            group: el.group || this.recordActionList[byTarget].group,
-            kind: el.kind || this.recordActionList[byTarget].kind,
-            scanIndex: typeof el.scanIndex === 'number' ? el.scanIndex : this.recordActionList[byTarget].scanIndex,
-            pageUrl: el.pageUrl || this.recordActionList[byTarget].pageUrl,
-            pageOrder: typeof el.pageOrder === 'number' ? el.pageOrder : this.recordActionList[byTarget].pageOrder,
-            scanPosition: el.position || this.recordActionList[byTarget].scanPosition,
-            position: this.recordActionList[byTarget].screenshotPosition || el.position || this.recordActionList[byTarget].position,
+            realLabel: el.realLabel || existing.realLabel || '',
+            rect: el.rect || existing.rect || {},
+            mothed: el.mothed || 'By.XPATH',
+            elementType: el.target,
+            transcationType: 'playwright',
+            group: el.group || existing.group,
+            kind: el.kind || existing.kind,
+            scanIndex: typeof el.scanIndex === 'number' ? el.scanIndex : existing.scanIndex,
+            pageUrl: el.pageUrl || existing.pageUrl,
+            pageOrder: typeof el.pageOrder === 'number' ? el.pageOrder : existing.pageOrder,
+            scanPosition: el.position || existing.scanPosition,
+            position: existing.screenshotPosition || el.position || existing.position,
             options: el.options && el.options.length > 0
-              ? el.options : this.recordActionList[byTarget].options,
-            anchorTarget: el.anchorTarget || this.recordActionList[byTarget].anchorTarget,
-            anchorPropertiesName: el.anchorPropertiesName || this.recordActionList[byTarget].anchorPropertiesName,
-            recorded: this.recordActionList[byTarget].recorded || this.isVisibleRecord(el),
-            manualRecord: this.recordActionList[byTarget].manualRecord || false
+              ? el.options : existing.options,
+            anchorTarget: el.anchorTarget || existing.anchorTarget,
+            anchorPropertiesName: el.anchorPropertiesName || existing.anchorPropertiesName,
+            recorded: existing.recorded || this.isVisibleRecord(el),
+            manualRecord: existing.manualRecord || false
           }
         } else {
           if (this.recordActionList.length > 0) {
@@ -786,22 +802,21 @@ const RecordManager = {
   /** 把截图画布归一化坐标写回操作记录，并保留扫描阶段的原始坐标。 */
   applyScreenshotPositions(items, positions) {
     ;(items || []).forEach(item => {
-      const screenshotPosition = positions && positions[item.id]
+      const screenshotPosition = positions && positions[item.propertiesID]
       if (!screenshotPosition) return
       if (!item.scanPosition && item.position) item.scanPosition = item.position
       item.screenshotPosition = screenshotPosition.status === 'captured'
         ? {
-            x: screenshotPosition.x,
-            y: screenshotPosition.y,
-            width: screenshotPosition.width,
-            height: screenshotPosition.height,
-            coordinateType: screenshotPosition.coordinateType
+            x1: screenshotPosition.x,
+            y1: screenshotPosition.y,
+            x2: screenshotPosition.x + screenshotPosition.width,
+            y2: screenshotPosition.y + screenshotPosition.height
           }
         : null
       item.position = item.screenshotPosition
       item.positionStatus = screenshotPosition.status
 
-      const scanned = this.scannedElementList.find(candidate => candidate.id === item.id)
+      const scanned = this.scannedElementList.find(candidate => candidate.propertiesID === item.propertiesID)
       if (scanned && scanned !== item) {
         if (!scanned.scanPosition && scanned.position) scanned.scanPosition = scanned.position
         scanned.screenshotPosition = item.screenshotPosition
@@ -824,7 +839,7 @@ const RecordManager = {
     if (this.groupScreenshots[groupKey].length === 0) {
       this.getGroupItems(this.getGroupNode(groupKey)).forEach(item => {
         this.clearScreenshotPosition(item)
-        const scanned = this.scannedElementList.find(candidate => candidate.id === item.id)
+        const scanned = this.scannedElementList.find(candidate => candidate.propertiesID === item.propertiesID)
         if (scanned && scanned !== item) {
           this.clearScreenshotPosition(scanned)
         }
@@ -834,67 +849,65 @@ const RecordManager = {
   },
 
   /**
-   * 输出平行节点列表，通过 id/pid 表达操作列表中的父子层级。
+   * 输出平行节点列表，通过 propertiesID/propertiesPID 表达父子层级。
    * 分组节点使用 page/tab/collapse/dialog，操作节点统一使用 ele。
-   * 结构：{ id, pid, type, key?, name?, url?, screenshots?, ...动作字段 }
+   * 结构：{ propertiesID, propertiesPID, type, propertiesName, ...对接字段 }
    * 分组节点携带其下的截图地址数组；操作节点通过 exportAction 精简字段。
    */
   buildExportGroups() {
     const result = []
 
-    /** 将内部记录精简为可导出的动作对象（剔除渲染/定位内部字段，保留录入内容）。 */
+    /** 将内部记录转换为稳定的对接平台字段结构。 */
     function exportAction(item, parentId) {
-      const {
-        group,
-        attributes,
-        disabled,
-        required,
-        readonly,
-        tagName,
-        kind,
-        label,
-        placeholder,
-        title,
-        type,
-        options,
-        scanIndex,
-        pageKey,
-        pageUrl,
-        routeIdentity,
-        pageOrder,
-        manualOrder,
-        scanPosition,
-        screenshotPosition,
-        positionStatus,
-        position,
-        _recordKey,
-        ...action
-      } = item
-      const attr = Object.assign({}, attributes || {})
+      const attr = Object.assign({}, item.attributes || {})
 
       ;['disabled', 'required', 'readonly'].forEach(key => {
         if (typeof item[key] !== 'undefined') attr[key] = item[key]
       })
 
-      return Object.assign(action, {
-        id: item.id,
-        pid: parentId,
+      return {
+        propertiesID: item.propertiesID,
+        propertiesPID: parentId,
         type: 'ele',
-        position: screenshotPosition || null,
-        positionStatus: positionStatus || (screenshotPosition ? 'captured' : 'not-captured'),
-        params: { label_text: item.propertiesName, value: item.value || '' },
+        propertiesName: item.propertiesName || '',
+        eventTypeValue: item.eventTypeValue || '',
+        eventTypeName: item.eventTypeName || '',
+        elementType: item.target || '',
+        mothed: 'By.XPATH',
+        target: item.target || '',
+        options: Array.isArray(item.options) ? item.options.slice() : [],
+        objectValue: item.objectValue || '',
+        transcationType: 'playwright',
+        realLabel: item.realLabel || '',
+        regionId: '',
+        regionLabel: '',
+        rect: item.screenshotPosition || item.rect || item.scanPosition || item.position || {},
+        positionStatus: item.positionStatus || (item.screenshotPosition ? 'captured' : 'not-captured'),
+        params: { label_text: item.propertiesName || '', objectValue: item.objectValue || '' },
         attr: attr
-      })
+      }
     }
 
     /** 递归把展示树节点平铺为导出列表；分组节点附带其截图地址。 */
     function exportNode(node, parentId, screenshots) {
+      const propertiesID = Utils.uuid()
       result.push({
-        id: node.key,
-        pid: parentId,
+        propertiesID: propertiesID,
+        propertiesPID: parentId,
         type: node.type,
         key: node.key,
-        name: node.name,
+        propertiesName: node.propertiesName,
+        eventTypeValue: 'click',
+        eventTypeName: '点击',
+        elementType: '',
+        mothed: '',
+        options: '',
+        objectValue: '',
+        transcationType: 'playwright',
+        realLabel: '',
+        regionId: '',
+        regionLabel: '',
+        rect: {},
         url: node.url || '',
         screenshots: (screenshots[node.key] || []).slice()
       })
@@ -903,9 +916,9 @@ const RecordManager = {
         if (entry.kind === 'item') {
           // 无名称的条目不导出（既无定位也无录入内容，导出无意义）。
           if (!entry.item.propertiesName) return
-          result.push(exportAction(entry.item, node.key))
+          result.push(exportAction(entry.item, propertiesID))
         } else {
-          exportNode(entry.node, node.key, screenshots)
+          exportNode(entry.node, propertiesID, screenshots)
         }
       })
     }
@@ -919,7 +932,7 @@ const RecordManager = {
    * 调用位置：popup/index.js → main
    *
    * 绑定清单：
-   *   - 保存命令 / 名称 / 值：把输入框值写回 currentRecordInfo 后刷新列表。
+   *   - 保存事件类型 / 名称 / 对象值：把输入框值写回 currentRecordInfo 后刷新列表。
    *   - 剪切、粘贴、删除普通操作记录。
    *   - 复制 Target 按钮、行点击（选中并回填编辑框）。
    *   - 分组操作：截图、查看截图列表、删除分组。
@@ -929,9 +942,10 @@ const RecordManager = {
   initEditBindings() {
     const self = this
 
-    // 保存编辑后的命令
+    // 保存编辑后的事件类型
     $('#saveCmdBtn').click(function () {
-      self.currentRecordInfo.command = $('#editCmd').val()
+      self.currentRecordInfo.eventTypeValue = $('#editCmd').val()
+      self.currentRecordInfo.eventTypeName = Utils.getEventTypeName(self.currentRecordInfo.eventTypeValue)
       self.updateRecorder()
     })
 
@@ -951,7 +965,7 @@ const RecordManager = {
 
     // 保存编辑后的值
     $('#saveValBtn').click(function () {
-      self.currentRecordInfo.value = $('#editVal').val()
+      self.currentRecordInfo.objectValue = $('#editVal').val()
       self.updateRecorder()
     })
 
@@ -1019,9 +1033,9 @@ const RecordManager = {
       $(this).siblings().removeClass('active')
       $(this).addClass('active')
       self.currentRecordInfo = self.getRecordByKey($(this).attr('data-record-key')) || {}
-      $('#editCmd').val(self.currentRecordInfo.command || '')
+      $('#editCmd').val(self.currentRecordInfo.eventTypeValue || '')
       $('#editName').val(self.currentRecordInfo.propertiesName || '')
-      $('#editVal').val(self.currentRecordInfo.value || '')
+      $('#editVal').val(self.currentRecordInfo.objectValue || '')
     })
 
     // 分组截图按钮：截图期间当前按钮可再次点击，用于停止滚动并生成已捕获内容。
@@ -1047,10 +1061,10 @@ const RecordManager = {
         const tab = await getCurrentTab()
         if (!tab || !tab.id) throw new Error('无法获取目标页面')
 
-        captureItems = self.getGroupItems(groupNode).filter(item => item.id && item.target)
+        captureItems = self.getGroupItems(groupNode).filter(item => item.propertiesID && item.target)
         const boundaryItems = self.getGroupBoundaryItems(groupNode).filter(item => item.target)
-        groupNode.captureItems = captureItems.map(item => ({ id: item.id, target: item.target }))
-        groupNode.captureBoundaryItems = boundaryItems.map(item => ({ id: item.id, target: item.target }))
+        groupNode.captureItems = captureItems.map(item => ({ propertiesID: item.propertiesID, target: item.target }))
+        groupNode.captureBoundaryItems = boundaryItems.map(item => ({ propertiesID: item.propertiesID, target: item.target }))
         self.setScreenshotCaptureState(groupKey, '停止并生成')
         const screenshot = await ScreenshotService.captureFullPage(tab, groupNode, (current, total) => {
           self.setScreenshotCaptureState(groupKey, '停止并生成 ' + current + '/' + total)
@@ -1084,7 +1098,7 @@ const RecordManager = {
       const groupKey = $(this).attr('data-group-key')
       const groupNode = self.getGroupNode(groupKey)
       if (!groupNode) return
-      if (!confirm('确定删除分组“' + groupNode.name + '”及其下所有操作吗？此操作无法撤销。')) return
+      if (!confirm('确定删除分组“' + groupNode.propertiesName + '”及其下所有操作吗？此操作无法撤销。')) return
       self.deleteGroup(groupKey)
     })
 
@@ -1126,7 +1140,7 @@ const RecordManager = {
     const node = this.getGroupNode(groupKey)
     if (!node) return
     const paths = this.getGroupScreenshots(groupKey)
-    document.getElementById('screenshotDialogTitle').textContent = node.name + ' - 截图 ' + paths.length
+    document.getElementById('screenshotDialogTitle').textContent = node.propertiesName + ' - 截图 ' + paths.length
     let html = ''
     if (paths.length === 0) {
       html = '<div class="screenshot-empty">该分组暂无截图</div>'

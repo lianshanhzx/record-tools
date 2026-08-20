@@ -62,10 +62,10 @@
         </div>
         <div class="list-head-row">
             <span class="col-seq">序号</span>
-            <span class="col-cmd">Command</span>
+            <span class="col-cmd">事件类型</span>
             <span class="col-name">业务对象名称</span>
             <span class="col-target">Target</span>
-            <span class="col-val">Value</span>
+            <span class="col-val">Object Value</span>
             <span class="col-actions">操作</span>
         </div>
         <div class="list-body" id="listBody"></div>
@@ -73,8 +73,8 @@
         <!-- Edit & Actions -->
         <div class="edit-area">
             <div class="edit-row">
-                <span class="edit-label">Command</span>
-                <select id="editCmd"><option>click</option><option>input</option><option>select</option></select>
+                <span class="edit-label">事件类型</span>
+                <select id="editCmd"><option value="click">点击</option><option value="input">输入</option><option value="select">选择</option><option value="fill_date_field">日期</option><option value="select_tree_option">树选择</option></select>
                 <button id="saveCmdBtn">更改</button>
                 <button id="deleteCmdBtn" class="danger">删除</button>
             </div>
@@ -84,7 +84,7 @@
                 <button id="saveNameBtn">更改</button>
             </div>
             <div class="edit-row">
-                <span class="edit-label">Value</span>
+                <span class="edit-label">Object Value</span>
                 <input id="editVal" type="text">
                 <button id="saveValBtn">更改</button>
             </div>
@@ -94,7 +94,7 @@
         <div class="actions-bar">
             <button id="clearBtn">重录</button>
             <button id="downloadBtn">下载</button>
-            <button id="downloadAllElementsBtn">下载扫描元素</button>
+            <!-- <button id="downloadAllElementsBtn">下载扫描元素</button> -->
             <button id="submitBtn" class="primary">提交</button>
         </div>
     </div>

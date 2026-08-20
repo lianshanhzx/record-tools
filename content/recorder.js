@@ -56,19 +56,17 @@ const Recorder = {
     labelChName = labelChName?.replace(/[^\w\d\u4e00-\u9fa5]/g, '');
 
     let xp = new SmartSelector(element).getSelector();
-    let actionType = '';
+    let eventTypeValue = Utils.normalizeEventType(element['command']);
+    const realLabel = typeof getRealLabelByElement !== 'undefined'
+      ? (getRealLabelByElement(element) || '')
+      : ''
+    const rect = typeof PageElementScanner !== 'undefined' && typeof PageElementScanner.getPagePosition === 'function'
+      ? PageElementScanner.getPagePosition(element)
+      : {}
 
     if (element['command'] === 'fill_date_field') {
-      actionType = 'fill_date_field';
+      eventTypeValue = 'fill_date_field';
       element['command'] = 'input'
-    } else if (element['command'] === 'input' || element['command'] === 'fill_form_field') {
-      actionType = 'fill_form_field';
-    } else if (element['command'] === 'click') {
-      actionType = 'click_element_by_index';
-    } else if (element['command'] === 'selectOption' || element['command'] === 'select') {
-      actionType = 'select_option';
-    } else if (element['command'] === 'select_tree_option') {
-      actionType = 'select_tree_option';
     }
 
     // 计算元素分组路径（弹窗/页签/折叠面板），供 popup 树形展示使用
@@ -90,13 +88,17 @@ const Recorder = {
     } catch (e) {}
 
     return {
-      id: id,
-      action: actionType,
-      command: element['command'],
+      propertiesID: id,
+      eventTypeValue: eventTypeValue,
+      eventTypeName: Utils.getEventTypeName(eventTypeValue),
       target: xp,
-      targetType: 'xpath',
+      mothed: 'By.XPATH',
+      elementType: xp,
+      transcationType: 'playwright',
       tagName: element.tagName.toLowerCase(),
       propertiesName: labelChName || '',
+      realLabel: realLabel,
+      rect: rect,
       group: group,
       pageKey: pageContext ? pageContext.key : '',
       pageUrl: pageContext ? pageContext.url : window.location.href,
@@ -107,7 +109,7 @@ const Recorder = {
   },
 
   /**
-   * 为元素分配动作唯一 id，使用 Utils.uuid() 生成。
+   * 为元素分配唯一 propertiesID，使用 Utils.uuid() 生成。
    * 调用位置：recorder.js → parseElement / setAction
    */
   getID() {
@@ -177,9 +179,9 @@ const Recorder = {
       const value = self.getInputValue(inputElement)
       if (value && value !== initialValue) {
         resolved = true
-        const idx = self.actions.findIndex(a => a.id === action.id)
+        const idx = self.actions.findIndex(a => a.propertiesID === action.propertiesID)
         if (idx >= 0) {
-          self.actions[idx].value = value
+          self.actions[idx].objectValue = value
           if (self.actions[idx].attributes) {
             self.actions[idx].attributes.value = value
           }
@@ -200,11 +202,10 @@ const Recorder = {
    * 调用位置：content/eventMonitor.js → change/click 事件处理
    */
   setAttributeAction(element) {
-    let attributes = {
-      type: ACTION_TYPE_ATTRIBUTE
-    };
-    attributes.value = this.getInputValue(element)
-    return this.setAction(element, attributes);
+    return this.setAction(element, {
+      type: ACTION_TYPE_ATTRIBUTE,
+      objectValue: this.getInputValue(element)
+    });
   },
 
   /**
@@ -219,15 +220,15 @@ const Recorder = {
       { timestamp: Date.now() },
       otherParam
     );
-    action.command = action.command || action.attributes.command
-
-    // 关联扫描信息：命中扫描记录时，使用扫描记录的 target/propertiesName/group/kind/scanIndex，
-    // 保留实际元素产生的 command/value/options，保证点击按钮内部子元素也能定位到扫描按钮。
+    // 关联扫描信息：命中扫描记录时，使用扫描记录的定位和分组信息。
     if (typeof PageElementScannerController !== 'undefined' && typeof PageElementScannerController.findScannedInfoByElement === 'function') {
       const scannedInfo = PageElementScannerController.findScannedInfoByElement(element)
       if (scannedInfo) {
         action.target = scannedInfo.target
+        action.elementType = scannedInfo.target
         action.propertiesName = scannedInfo.propertiesName
+        action.realLabel = scannedInfo.realLabel || action.realLabel
+        action.rect = scannedInfo.rect || scannedInfo.position || action.rect
         action.group = scannedInfo.group || action.group
         action.kind = scannedInfo.kind
         action.scanIndex = scannedInfo.scanIndex
@@ -260,16 +261,14 @@ const Recorder = {
     action.recorded = true
 
     const lastAction = this.actions[this.actions.length - 1];
-    if (this.actions.length > 0 && lastAction.command == 'select' && element.command == 'selectOption') {
+    if (this.actions.length > 0 && lastAction.eventTypeValue === 'select' && element.command === 'selectOption') {
       let lastEle = null
-      if (lastAction.targetType == 'xpath') {
+      if (lastAction.mothed === 'By.XPATH') {
         lastEle = XPathHelper.$(lastAction.target)
-      } else if (lastAction.targetType == 'css') {
-        lastEle = document.querySelector(lastAction.target)
       }
       setTimeout(() => {
         if (lastEle && lastEle.value) {
-          lastAction.value = lastEle.value
+          lastAction.objectValue = lastEle.value
         } else if (lastEle) {
           const selectEle = lastEle.closest(".el-select")
           const multiEles = selectEle ? selectEle.querySelectorAll(".el-select__tags-text") : []
@@ -281,7 +280,7 @@ const Recorder = {
                 selectValueArr.push(item.innerText)
               }
             })
-            lastAction.value = selectValueArr.join(',')
+            lastAction.objectValue = selectValueArr.join(',')
           }
         }
 

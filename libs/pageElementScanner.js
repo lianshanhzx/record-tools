@@ -26,7 +26,7 @@ const PageElementScanner = (function () {
   // ==================== 基础工具方法 ====================
 
   /**
-   * 生成一个符合录制系统风格的 UUID，用于为每个扫描元素分配唯一 id。
+   * 生成一个符合录制系统风格的 UUID，用于为每个扫描元素分配 propertiesID。
    * @returns {string} 36 位 UUID 字符串
    */
   function uuid() {
@@ -84,7 +84,7 @@ const PageElementScanner = (function () {
    * 获取元素在文档坐标系中的边界坐标。
    * 使用文档坐标而非视口坐标，页面滚动后同一元素的坐标仍可用于全页截图等后续标注。
    * @param {Element} element 目标元素
-   * @returns {{topLeft: {x: number, y: number}, bottomRight: {x: number, y: number}}}
+   * @returns {{x1: number, y1: number, x2: number, y2: number}}
    */
   function getPagePosition(element) {
     try {
@@ -92,14 +92,13 @@ const PageElementScanner = (function () {
       const scrollX = window.scrollX || window.pageXOffset || 0
       const scrollY = window.scrollY || window.pageYOffset || 0
       return {
-        topLeft: { x: rect.left + scrollX, y: rect.top + scrollY },
-        bottomRight: { x: rect.right + scrollX, y: rect.bottom + scrollY }
+        x1: rect.left + scrollX,
+        y1: rect.top + scrollY,
+        x2: rect.right + scrollX,
+        y2: rect.bottom + scrollY
       }
     } catch (e) {
-      return {
-        topLeft: { x: 0, y: 0 },
-        bottomRight: { x: 0, y: 0 }
-      }
+      return { x1: 0, y1: 0, x2: 0, y2: 0 }
     }
   }
 
@@ -150,7 +149,7 @@ const PageElementScanner = (function () {
   /**
    * 根据配置的关键词排除元素。
    *
-   * 匹配字段：propertiesName / label / placeholder / title / value。
+   * 匹配字段：propertiesName / realLabel / placeholder / title / objectValue。
    * 只要任一字段包含 excludedKeywords 中的关键词，即被排除。
    *
    * @param {Object} info 扫描元素信息对象
@@ -164,10 +163,10 @@ const PageElementScanner = (function () {
 
     const texts = [
       info.propertiesName,
-      info.label,
+      info.realLabel,
       info.placeholder,
       info.title,
-      info.value
+      info.objectValue
     ].filter(Boolean)
 
     return keywords.some(k => k && texts.some(t => t.indexOf(k) !== -1))
@@ -457,10 +456,10 @@ const PageElementScanner = (function () {
     return 'unknown'
   }
 
-  // ==================== command 映射 ====================
+  // ==================== 事件类型映射 ====================
 
   /**
-   * 根据元素种类映射到录制命令，与现有录制系统的 command 字段保持一致。
+   * 根据元素种类映射到统一事件类型。
    *
    * 映射规则：
    *   input / textarea   -> 'input'            输入动作
@@ -469,7 +468,7 @@ const PageElementScanner = (function () {
    *   button             -> 'click'            点击动作
    *
    * @param {string} kind 元素种类
-   * @returns {string} 对应的 command
+   * @returns {string} 对应的事件类型
    */
   function getCommandByKind(kind) {
     switch (kind) {
@@ -604,23 +603,24 @@ const PageElementScanner = (function () {
    * 扫描单个元素，生成与录制记录格式对齐的标准化描述对象。
    *
    * 生成的字段：
-   *   id              UUID
-   *   command/action  录制命令
+   *   propertiesID    UUID
+   *   eventTypeValue  事件类型
+   *   eventTypeName   事件类型中文说明
    *   target          唯一 XPath
-   *   targetType      固定为 'xpath'
+   *   mothed          固定为 'By.XPATH'
    *   tagName         目标元素标签名
-   *   kind            元素种类
-   *   propertiesName  中文业务名称/label（与录制记录字段名一致）
-   *   label           同上，冗余一份方便阅读
+   *   elementType     target 字段的值
+   *   propertiesName  用于识别和人工调整的业务名称
+   *   realLabel       目标元素真实的 label 属性值
    *   placeholder     placeholder 提示
    *   title           title 属性
-   *   value           当前值
+   *   objectValue     当前值
    *   disabled        是否禁用
    *   required        是否必填
    *   readonly        是否只读
    *   type            input 类型
    *   group           元素分组路径（弹窗/页签/折叠面板，由 ElementGrouper 计算）
-   *   position        元素边界的文档坐标（左上角 topLeft、右下角 bottomRight）
+   *   rect            元素边界的文档坐标（x1/y1 左上角，x2/y2 右下角）
    *   timestamp       扫描时间戳
    *
    * @param {Element} element 候选元素（用于判定 kind）
@@ -659,6 +659,14 @@ const PageElementScanner = (function () {
     const inputType = targetElement.getAttribute ? (targetElement.getAttribute('type') || '') : ''
     const placeholder = targetElement.getAttribute ? (targetElement.getAttribute('placeholder') || '') : ''
     const title = targetElement.getAttribute ? (targetElement.getAttribute('title') || '') : ''
+    let realLabel = ''
+    try {
+      if (typeof getRealLabelByElement !== 'undefined') {
+        realLabel = getRealLabelByElement(targetElement) || ''
+      }
+    } catch (e) {
+      console.warn('[PageElementScanner] 获取真实 label 失败:', e, targetElement)
+    }
     const value = targetElement.value || ''
     const disabled = !!targetElement.disabled
     const required = !!targetElement.required
@@ -685,19 +693,23 @@ const PageElementScanner = (function () {
       }
     } catch (e) {}
 
+    const eventTypeValue = Utils.normalizeEventType(getCommandByKind(kind))
+    const rect = getPagePosition(targetElement)
     return {
-      id: uuid(),
-      command: getCommandByKind(kind),
-      action: getCommandByKind(kind),
+      propertiesID: uuid(),
+      eventTypeValue: eventTypeValue,
+      eventTypeName: Utils.getEventTypeName(eventTypeValue),
       target: xpath,
-      targetType: 'xpath',
+      mothed: 'By.XPATH',
+      elementType: xpath,
+      transcationType: 'playwright',
       tagName: tagName,
       kind: kind,
       propertiesName: label,
-      label: label,
+      realLabel: realLabel,
       placeholder: placeholder,
       title: title,
-      value: value,
+      objectValue: value,
       disabled: disabled,
       required: required,
       readonly: readonly,
@@ -707,7 +719,8 @@ const PageElementScanner = (function () {
       pageUrl: pageContext ? pageContext.url : window.location.href,
       routeIdentity: pageContext ? pageContext.routeIdentity : '',
       options: options,
-      position: getPagePosition(targetElement),
+      rect: rect,
+      position: rect,
       timestamp: Date.now()
     }
   }
