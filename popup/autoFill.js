@@ -1,10 +1,10 @@
 /**
  * autoFill.js — 自动填表 UI 模块
- * 负责智能填表面板的交互逻辑：面板切换、日志显示、配置管理、执行填表流程。
+ * 负责智能填表面板的交互逻辑：面板切换、日志显示、执行填表流程。
  *
  * 依赖：
  *   - getCurrentTab / sendToContent / addFillLog (popup/index.js 全局函数)
- *   - chrome.runtime / chrome.storage API
+ *   - chrome.runtime API
  */
 
 const AutoFillUI = {
@@ -17,13 +17,10 @@ const AutoFillUI = {
    */
   init() {
     document.getElementById('fillBar').addEventListener('click', () => this.toggleFillPanel())
-    document.getElementById('fillConfigToggle').addEventListener('click', (e) => { e.stopPropagation(); this.toggleFillConfig() })
     document.getElementById('executeFillBtn').addEventListener('click', () => this.executeFill())
     document.getElementById('fillInstruction').addEventListener('keydown', (e) => {
       if (e.key === 'Enter' && e.ctrlKey) this.executeFill()
     })
-    document.getElementById('saveFillConfig').addEventListener('click', () => this.saveFillConfig())
-    this.loadFillConfig()
   },
 
   /**
@@ -35,17 +32,6 @@ const AutoFillUI = {
     const arrow = document.getElementById('fillToggleArrow')
     body.classList.toggle('open')
     arrow.textContent = body.classList.contains('open') ? '▴' : '▾'
-  },
-
-  /**
-   * 切换 LLM 配置面板展开/收起。
-   * 调用位置：autoFill.js → init (fillConfigToggle 点击)
-   */
-  toggleFillConfig() {
-    const el = document.getElementById('fillConfig')
-    const arrow = document.getElementById('fillConfigArrow')
-    el.classList.toggle('open')
-    arrow.textContent = el.classList.contains('open') ? '▾' : '▸'
   },
 
   /**
@@ -151,36 +137,5 @@ const AutoFillUI = {
     chrome.runtime.onMessage.addListener(listener)
     // 调用 popup/index.js → sendToContent
     sendToContent(this.fillTabId, { type: 'executeActions', actions })
-  },
-
-  /**
-   * 从 chrome.storage 加载 LLM 配置。
-   * 调用位置：autoFill.js → init
-   */
-  loadFillConfig() {
-    chrome.storage.sync.get('atpFormConfig', (res) => {
-      const c = res.atpFormConfig || {}
-      document.getElementById('fillApiKey').value = c.apiKey || ''
-      document.getElementById('fillBaseUrl').value = c.baseUrl || 'https://api.deepseek.com/v1'
-      document.getElementById('fillModel').value = c.model || 'deepseek-v4-flash'
-    })
-  },
-
-  /**
-   * 保存 LLM 配置到 chrome.storage。
-   * 调用位置：autoFill.js → init (saveFillConfig 按钮点击)
-   */
-  saveFillConfig() {
-    const config = {
-      apiKey: document.getElementById('fillApiKey').value.trim(),
-      baseUrl: document.getElementById('fillBaseUrl').value.trim(),
-      model: document.getElementById('fillModel').value.trim()
-    }
-    const statusEl = document.getElementById('fillConfigStatus')
-    if (!config.apiKey) { statusEl.textContent = '请输入 API Key'; statusEl.className = 'config-msg err'; return }
-    chrome.storage.sync.set({ atpFormConfig: config }, () => {
-      statusEl.textContent = '已保存'; statusEl.className = 'config-msg ok'
-      setTimeout(() => { statusEl.textContent = '' }, 2000)
-    })
   }
 }

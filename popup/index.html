@@ -10,7 +10,10 @@
         <!-- Header -->
         <div class="header">
             <span class="logo">TY-record-tools</span>
-            <span class="header-badge" id="recordCount">0 条</span>
+            <div class="header-actions">
+                <span class="header-badge" id="recordCount">0 条</span>
+                <button type="button" id="settingsBtn" class="settings-btn" aria-label="打开配置" title="配置">设置</button>
+            </div>
         </div>
 
         <!-- Recording Controls -->
@@ -36,22 +39,6 @@
             <div class="fill-summary" id="fillSummary"></div>
             <div class="fill-log" id="fillLog">
                 <div class="fill-log-empty">等待操作...</div>
-            </div>
-                <div class="fill-config-toggle" id="fillConfigToggle">
-                <span>LLM 配置</span>
-                <span class="arrow" id="fillConfigArrow">▸</span>
-            </div>
-            <div class="fill-config" id="fillConfig">
-                <label>API Key</label>
-                <input type="password" id="fillApiKey" placeholder="sk-...">
-                <label>API 地址</label>
-                <input type="text" id="fillBaseUrl" value="https://api.deepseek.com/v1">
-                <label>模型</label>
-                <input type="text" id="fillModel" value="deepseek-chat">
-                <div class="fill-config-actions">
-                    <button id="saveFillConfig">保存</button>
-                    <span id="fillConfigStatus"></span>
-                </div>
             </div>
         </div>
 
@@ -113,12 +100,52 @@
         <button type="button" id="closeScreenshotPreview">关闭预览</button>
         <div class="screenshot-preview-body"><img id="screenshotPreviewImage" alt="截图预览"></div>
     </div>
+
+    <div id="settingsDialog" class="settings-dialog" aria-hidden="true">
+        <div class="settings-panel" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
+            <div class="settings-header">
+                <strong id="settingsTitle">配置</strong>
+                <button type="button" id="closeSettingsBtn" class="settings-close" aria-label="关闭配置">关闭</button>
+            </div>
+            <div class="settings-body">
+                <section class="settings-section">
+                    <h2>智能自动填表</h2>
+                    <p>用于调用兼容 Chat Completions 的 LLM 服务。</p>
+                    <label for="settingsApiKey">API Key</label>
+                    <input type="password" id="settingsApiKey" placeholder="sk-..." autocomplete="off">
+                    <label for="settingsBaseUrl">API 地址</label>
+                    <input type="url" id="settingsBaseUrl" placeholder="https://api.example.com/v1">
+                    <label for="settingsModel">模型</label>
+                    <input type="text" id="settingsModel" placeholder="deepseek-v4-flash">
+                </section>
+                <section class="settings-section">
+                    <h2>截图</h2>
+                    <p>下载目录只能填写浏览器下载目录下的相对路径。</p>
+                    <label for="settingsScreenshotDirectory">下载子目录</label>
+                    <input type="text" id="settingsScreenshotDirectory" placeholder="TY-record-tools/screenshots">
+                    <label for="settingsScreenshotMaxPixels">最大像素数</label>
+                    <input type="number" id="settingsScreenshotMaxPixels" min="1" step="1">
+                </section>
+                <section class="settings-section">
+                    <h2>上传服务</h2>
+                    <p>用于上传全页截图的服务地址。</p>
+                    <label for="settingsUploadBaseUrl">服务地址</label>
+                    <input type="url" id="settingsUploadBaseUrl" placeholder="http://example.com:11002">
+                </section>
+            </div>
+            <div class="settings-footer">
+                <span id="settingsStatus" class="config-msg" aria-live="polite"></span>
+                <button type="button" id="saveSettingsBtn" class="settings-save">保存配置</button>
+            </div>
+        </div>
+    </div>
 </body>
 <script src="../config/config.js"></script>
 <script src="../libs/jquery.js"></script>
 <script src="../libs/utils.js"></script>
 <script src="../libs/elementGrouper.js"></script>
 <script src="./recordManager.js"></script>
+<script src="./settings.js"></script>
 <script src="./autoFill.js"></script>
 <script src="./uploadService.js"></script>
 <script src="./screenshotService.js"></script>

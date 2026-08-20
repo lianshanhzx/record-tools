@@ -11,6 +11,7 @@
 
 window.onload = async function () {
   main();
+  SettingsUI.init()
   // 调用 popup/autoFill.js → AutoFillUI.init
   AutoFillUI.init()
   // popup 打开时通知 content script 触发页面扫描

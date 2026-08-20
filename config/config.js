@@ -1,8 +1,20 @@
-// 截图保存到浏览器默认下载目录下的此子目录，不能配置为操作系统绝对路径。
-var screenshotDownloadDirectory = 'TY-record-tools/screenshots';
+// 配置窗口未保存时使用的默认值。用户修改后的值保存在 chrome.storage.sync。
+var APP_DEFAULT_CONFIG = {
+  llm: {
+    apiKey: '',
+    baseUrl: 'https://api.deepseek.com/v1',
+    model: 'deepseek-v4-flash'
+  },
+  screenshot: {
+    downloadDirectory: 'TY-record-tools/screenshots',
+    maxPixels: 25000000
+  },
+  upload: {
+    baseUrl: 'http://172.20.101.63:11002'
+  }
+};
 
-// Canvas 的像素上限，防止超长页面截图导致浏览器内存耗尽。2500万像素 ≈ 12屏(1920*1080的屏幕)
-var screenshotMaxPixels = 25000000;
-
-// 截图自动上传服务器地址配置。
-var BASEURL = 'http://172.20.101.63:11002';
+// 兼容现有截图与上传模块的全局配置变量。
+var screenshotDownloadDirectory = APP_DEFAULT_CONFIG.screenshot.downloadDirectory;
+var screenshotMaxPixels = APP_DEFAULT_CONFIG.screenshot.maxPixels;
+var BASEURL = APP_DEFAULT_CONFIG.upload.baseUrl;

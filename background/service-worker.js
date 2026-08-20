@@ -3,11 +3,12 @@
  * 负责消息路由、全局录制状态标记管理、外部消息监听。
  *
  * 依赖模块（通过 importScripts 加载）：
+ *   - APP_DEFAULT_CONFIG (config/config.js)     — 默认配置
  *   - PopupManager (background/popupManager.js) — 弹窗管理
  *   - LLMService (background/llmService.js)     — LLM 调用服务
  */
 
-importScripts('popupManager.js', 'llmService.js')
+importScripts('../config/config.js', 'popupManager.js', 'llmService.js')
 
 // ==================== 全局状态 ====================
 let monitorStates = {}
@@ -125,9 +126,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === 'callLLM') {
     const { fields, instruction } = message
-    const defaults = { baseUrl: 'https://api.deepseek.com/v1', model: 'deepseek-v4-flash', apiKey: '', temperature: 0.1, maxTokens: 4096, thinking: 'disabled' }
-    chrome.storage.sync.get('atpFormConfig', (res) => {
-      const config = Object.assign({}, defaults, res.atpFormConfig || {})
+    chrome.storage.sync.get(['appConfig', 'atpFormConfig'], (res) => {
+      // 读取旧 LLM 存储项，避免已有用户升级后需要重新填写密钥。
+      const savedConfig = res.appConfig || { llm: res.atpFormConfig || {} }
+      const config = Object.assign({}, APP_DEFAULT_CONFIG.llm, savedConfig.llm || {})
       if (!config.apiKey) {
         sendResponse({ error: '请先配置 API Key（点击设置按钮配置）' })
         return

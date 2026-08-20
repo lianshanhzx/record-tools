@@ -90,10 +90,10 @@ const LLMService = {
           { role: 'system', content: this.AUTO_FILL_SYSTEM_PROMPT },
           { role: 'user', content: prompt }
         ],
-        temperature: config.temperature,
-        max_tokens: config.maxTokens,
+        temperature: 0.1,
+        max_tokens: 4096,
         response_format: { type: 'json_object' },
-        thinking: { type: config.thinking || 'disabled' }
+        thinking: { type: 'disabled' }
       })
     })
     if (!response.ok) {
