@@ -553,10 +553,34 @@ const AutoFormFill = {
   normalizeAction(a) {
     const t = (a.action || '').toLowerCase().replace(/[-\s]/g, '_')
     if (t === 'fill_input' || t === 'fill' || t === 'input' || t === 'fillinput' || t === 'fill_form_field') return { ...a, action: 'fill_form_field' }
-    if (t === 'fill_date_field' || t === 'fill_date') return { ...a, action: 'fill_date_field' }
+    if (t === 'fill_date_field' || t === 'fill_date' || t === 'date') return { ...a, action: 'fill_date_field' }
     if (t === 'click_element_by_index' || t === 'click') return { ...a, action: 'click_element_by_index' }
-    if (t === 'select_option' || t === 'select' || t === 'option' || t === 'selectoption') return { ...a, action: 'select_option' }
+    if (t === 'select_option' || t === 'select' || t === 'select:click' || t === 'option' || t === 'selectoption') return { ...a, action: 'select_option' }
+    if (t === 'radio') return { ...a, action: 'select_radio' }
     return a
+  },
+
+  /** 选择单选框选项，按表单标签定位后匹配可见选项文本。 */
+  selectRadio(label, option) {
+    const c = this.getContainer()
+    const items = c.querySelectorAll('.el-form-item')
+    for (let pass = 1; pass <= 2; pass++) {
+      const exact = pass === 1
+      for (const item of items) {
+        const fieldLabel = item.querySelector('.el-form-item__label')?.textContent?.trim() || ''
+        if (exact ? fieldLabel !== label : (fieldLabel === label || !fieldLabel.includes(label))) continue
+        const radios = item.querySelectorAll('.el-radio, input[type="radio"]')
+        for (const radio of radios) {
+          const input = radio.matches('input[type="radio"]') ? radio : radio.querySelector('input[type="radio"]')
+          const text = (radio.textContent || '').trim()
+          if (!input || input.disabled || (text !== option && !text.includes(option))) continue
+          radio.click()
+          return 'ok:' + text
+        }
+        return 'radio-option-not-found:' + option
+      }
+    }
+    return 'label-not-found'
   },
 
   /**
@@ -610,7 +634,8 @@ const AutoFormFill = {
 
   /**
    * 批量执行 LLM 返回的填表动作。
-   * 支持动作类型：fill_form_field / fill_date_field / select_option / click_element_by_index。
+   * 支持内部动作：fill_form_field / fill_date_field / select_option / select_radio / click_element_by_index。
+   * 外部动作值会先在 normalizeAction 中转换，避免执行命令泄漏到导出 JSON。
    * 每执行一个动作，通过 chrome.runtime.sendMessage 发送进度通知。
    * 调用位置：content/messageHandler.js → onMessage (executeActions)
    */
@@ -625,6 +650,8 @@ const AutoFormFill = {
           result = await this.fillFormField(label, value)
         } else if (type === 'select_option') {
           result = await this.selectOption(label, option || value)
+        } else if (type === 'select_radio') {
+          result = await this.selectRadio(label, option || value)
         } else if (type === 'click_element_by_index') {
           result = await this.clickButtonForField(label)
         }

@@ -20,7 +20,7 @@ function uuid() {
   return s.join('')
 }
 
-/** 将历史命令/动作值归一为对接平台使用的事件类型。 */
+/** 将内部命令、历史值归一为对接平台使用的事件类型。 */
 function normalizeEventType(value) {
   switch (value) {
     case 'click':
@@ -29,11 +29,18 @@ function normalizeEventType(value) {
     case 'select':
     case 'selectOption':
     case 'select_option':
-      return 'select'
+    case 'select:click':
+    case 'checkbox':
+      return 'select:click'
+    case 'radio':
+    case 'select_radio':
+      return 'radio'
     case 'fill_date_field':
-      return 'fill_date_field'
+    case 'date':
+      return 'date'
     case 'select_tree_option':
-      return 'select_tree_option'
+    case 'select:tree':
+      return 'select:tree'
     case 'input':
     case 'fill_form_field':
     default:
@@ -45,9 +52,10 @@ function normalizeEventType(value) {
 function getEventTypeName(value) {
   switch (normalizeEventType(value)) {
     case 'click': return '点击'
-    case 'select': return '选择'
-    case 'fill_date_field': return '日期'
-    case 'select_tree_option': return '树选择'
+    case 'select:click': return '下拉框选择'
+    case 'select:tree': return '树形选择'
+    case 'radio': return '单选'
+    case 'date': return '日期'
     default: return '输入'
   }
 }

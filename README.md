@@ -417,8 +417,8 @@ Popup (uploadService.js)
 | `propertiesID` | 元素或分组的 UUID |
 | `propertiesPID` | 父分组的 `propertiesID` |
 | `propertiesName` | 元素业务名称或分组实际名称 |
-| `eventTypeValue` | `click` / `input` / `select` / `fill_date_field` / `select_tree_option` |
-| `eventTypeName` | 点击 / 输入 / 选择 / 日期 / 树选择 |
+| `eventTypeValue` | `click` / `input` / `select:click` / `select:tree` / `radio` / `date` |
+| `eventTypeName` | 点击 / 输入 / 下拉框选择 / 树形选择 / 单选 / 日期 |
 | `elementType` | 元素记录取 `target`，分组固定为空字符串 |
 | `mothed` | 元素固定为 `By.XPATH`，分组固定为空字符串 |
 | `objectValue` | 原元素 `value` 字段 |

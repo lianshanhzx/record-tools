@@ -69,14 +69,15 @@ const EventMonitor = {
       }
       const dateEditor = target.closest('.el-date-editor, .tsscdatepicker')
       if (dateEditor) {
-        target.command = 'fill_date_field'
+        target.command = 'date'
         target.commandCnStr = '日期选择'
         Recorder.setAttributeAction(target)
       } else {
+        const isRadio = target.tagName === 'INPUT' && target.type === 'radio'
         const isSelection = target.tagName === 'SELECT' ||
-          (target.tagName === 'INPUT' && (target.type === 'radio' || target.type === 'checkbox'))
-        target.command = isSelection ? 'select' : 'input'
-        target.commandCnStr = isSelection ? '选择' : '输入'
+          (target.tagName === 'INPUT' && target.type === 'checkbox')
+        target.command = isRadio ? 'radio' : (isSelection ? 'select' : 'input')
+        target.commandCnStr = isRadio ? '单选' : (isSelection ? '下拉框选择' : '输入')
         Recorder.setAttributeAction(target)
       }
     }
@@ -116,13 +117,17 @@ const EventMonitor = {
 
       } else if (dateIpt) {
         const dateInput = dateIpt.querySelector('input:not([type="hidden"])') || target
-        dateInput.command = 'fill_date_field'
+        dateInput.command = 'date'
         dateInput.commandCnStr = '日期选择'
         const action = Recorder.setAttributeAction(dateInput)
         if (action) {
           Recorder.monitorDateInput(dateInput, action)
         }
       } else {
+        // Element UI 单选/多选会在 click 后触发原生 input 的 change；由 change 分支统一记录。
+        if (target.closest('.el-radio, .el-checkbox')) {
+          return
+        }
         const treeInputEle = TreeSelectHandler.getTreeTriggerInput(target)
         if (treeInputEle) {
           treeInputEle.command = 'click'

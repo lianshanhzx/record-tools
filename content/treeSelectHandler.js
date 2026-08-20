@@ -201,7 +201,7 @@ const TreeSelectHandler = {
       }
 
       const action = Recorder.actions[actionIndex]
-      action.eventTypeValue = 'select_tree_option'
+      action.eventTypeValue = 'select:tree'
       action.eventTypeName = Utils.getEventTypeName(action.eventTypeValue)
       action.objectValue = finalValue || selectedText
       if (action.attributes) {

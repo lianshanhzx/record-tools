@@ -64,8 +64,8 @@ const Recorder = {
       ? PageElementScanner.getPagePosition(element)
       : {}
 
-    if (element['command'] === 'fill_date_field') {
-      eventTypeValue = 'fill_date_field';
+    if (element['command'] === 'fill_date_field' || element['command'] === 'date') {
+      eventTypeValue = 'date';
       element['command'] = 'input'
     }
 
@@ -261,7 +261,7 @@ const Recorder = {
     action.recorded = true
 
     const lastAction = this.actions[this.actions.length - 1];
-    if (this.actions.length > 0 && lastAction.eventTypeValue === 'select' && element.command === 'selectOption') {
+    if (this.actions.length > 0 && lastAction.eventTypeValue === 'select:click' && element.command === 'selectOption') {
       let lastEle = null
       if (lastAction.mothed === 'By.XPATH') {
         lastEle = XPathHelper.$(lastAction.target)

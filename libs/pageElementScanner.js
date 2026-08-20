@@ -463,8 +463,9 @@ const PageElementScanner = (function () {
    *
    * 映射规则：
    *   input / textarea   -> 'input'            输入动作
-   *   select / radio / checkbox -> 'select'    选择动作
-   *   date               -> 'fill_date_field'  日期填写动作
+    *   select / checkbox  -> 'select:click'     下拉框选择动作
+    *   radio              -> 'radio'            单选动作
+    *   date               -> 'date'             日期填写动作
    *   button             -> 'click'            点击动作
    *
    * @param {string} kind 元素种类
@@ -476,11 +477,12 @@ const PageElementScanner = (function () {
       case 'textarea':
         return 'input'
       case 'select':
-      case 'radio':
       case 'checkbox':
-        return 'select'
+        return 'select:click'
+      case 'radio':
+        return 'radio'
       case 'date':
-        return 'fill_date_field'
+        return 'date'
       case 'button':
         return 'click'
       default:
