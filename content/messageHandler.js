@@ -255,6 +255,39 @@ function getScreenshotGroupMaxScrollY(target, items, defaultMaxScrollY) {
   return Math.min(defaultMaxScrollY, Math.max(0, Math.ceil(lastBottom + bottomPadding - viewportHeight)))
 }
 
+function getScreenshotGroupStartY(target, groupContext, items, defaultMaxScrollY) {
+  // The page group keeps the existing full-page behavior. Only concrete container groups are
+  // allowed to skip content above their own boundary.
+  if (!groupContext || groupContext.type === 'page') return 0
+  const candidates = []
+  const groupElement = resolveScreenshotGroupElement(groupContext)
+  if (groupElement && (target.isDocument || target.element.contains(groupElement))) candidates.push(groupElement)
+  for (const item of items || []) {
+    const element = getScreenshotVisualElement(resolveScreenshotXPath(item.target))
+    if (!element || !element.isConnected) continue
+    if (!target.isDocument && !target.element.contains(element)) continue
+    candidates.push(element)
+  }
+  if (candidates.length === 0) return 0
+
+  const targetTop = target.isDocument
+    ? 0
+    : target.element.getBoundingClientRect().top + target.element.clientTop
+  let firstTop = null
+  for (const element of candidates) {
+    const rect = element.getBoundingClientRect()
+    const top = target.isDocument
+      ? rect.top + window.scrollY
+      : rect.top - targetTop + target.element.scrollTop
+    if (Number.isFinite(top)) firstTop = firstTop === null ? top : Math.min(firstTop, top)
+  }
+  if (firstTop === null) return 0
+
+  const viewportHeight = target.isDocument ? window.innerHeight : target.element.clientHeight
+  const topPadding = Math.min(120, Math.max(40, Math.floor(viewportHeight * 0.12)))
+  return Math.min(defaultMaxScrollY, Math.max(0, Math.floor(firstTop - topPadding)))
+}
+
 function getScreenshotTargetMetrics() {
   const state = screenshotScrollState
   if (state && state.isViewport) {
@@ -266,6 +299,7 @@ function getScreenshotTargetMetrics() {
       viewportWidth: window.innerWidth,
       viewportHeight: window.innerHeight,
       maxScrollY: 0,
+      captureStartY: 0,
       captureRect: null,
       elementRects: getScreenshotElementRects()
     }
@@ -282,6 +316,9 @@ function getScreenshotTargetMetrics() {
       maxScrollY: state && typeof state.maxScrollY === 'number'
         ? Math.min(state.maxScrollY, Math.max(0, size.height - window.innerHeight))
         : Math.max(0, size.height - window.innerHeight),
+      captureStartY: state && typeof state.captureStartY === 'number'
+        ? Math.min(state.captureStartY, Math.max(0, size.height - window.innerHeight))
+        : 0,
       captureRect: null,
       elementRects: getScreenshotElementRects()
     }
@@ -307,6 +344,9 @@ function getScreenshotTargetMetrics() {
     maxScrollY: typeof state.maxScrollY === 'number'
       ? Math.min(state.maxScrollY, Math.max(0, element.scrollHeight - element.clientHeight))
       : Math.max(0, element.scrollHeight - element.clientHeight),
+    captureStartY: typeof state.captureStartY === 'number'
+      ? Math.min(state.captureStartY, Math.max(0, element.scrollHeight - element.clientHeight))
+      : 0,
     captureRect: { left, top, width, height },
     elementRects: getScreenshotElementRects()
   }
@@ -361,7 +401,12 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       const defaultMaxScrollY = target.isDocument
         ? Math.max(0, target.element.scrollHeight - target.element.clientHeight)
         : Math.max(0, target.element.scrollHeight - target.element.clientHeight)
-      screenshotScrollState.maxScrollY = getScreenshotGroupMaxScrollY(target, boundaryItems, defaultMaxScrollY)
+      const captureStartY = getScreenshotGroupStartY(target, request.groupContext, boundaryItems, defaultMaxScrollY)
+      screenshotScrollState.captureStartY = captureStartY
+      screenshotScrollState.maxScrollY = Math.max(
+        captureStartY,
+        getScreenshotGroupMaxScrollY(target, boundaryItems, defaultMaxScrollY)
+      )
     }
     const metrics = getScreenshotTargetMetrics()
     sendResponse(Object.assign(metrics, {
@@ -436,7 +481,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   // 这些动作是自动执行的，不能被 popup 标记为人工录制。
   if (request.type === 'executeActions') {
     // 调用 libs/autoFormFill.js → AutoFormFill.executeActions
-    AutoFormFill.executeActions(request.actions).then(results => {
+    AutoFormFill.executeActions(request.actions, request.fields || []).then(results => {
       for (const r of results) {
         if (r.result === 'ok' || r.result.startsWith('ok')) {
           let xpath = ''
@@ -461,6 +506,17 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
           } catch (e) {}
           // 调用 messageHandler.js → sendBackMessage
           const eventTypeValue = Utils.normalizeEventType(r.action)
+          const field = (request.fields || []).find(f => f.label === r.label)
+          const recordedValue = r.action === 'select_option' && typeof r.result === 'string' && r.result.startsWith('ok:')
+            ? r.result.slice(3) : (r.value || '')
+          let recordedOptions = field && Array.isArray(field.options) ? field.options : []
+          if (recordedOptions.length === 0 && r.action === 'select_option' && el) {
+            try { recordedOptions = AutoFormFill.readVueOptions(el) || [] } catch (e) {}
+            if (recordedOptions.length === 0 && typeof PageElementScanner !== 'undefined' &&
+                typeof PageElementScanner.extractSelectOptions === 'function') {
+              try { recordedOptions = PageElementScanner.extractSelectOptions(el, el) || [] } catch (e) {}
+            }
+          }
           const target = xpath || ('label="' + r.label + '"')
           const rect = el && typeof PageElementScanner !== 'undefined' && typeof PageElementScanner.getPagePosition === 'function'
             ? PageElementScanner.getPagePosition(el)
@@ -475,7 +531,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
               elementType: target,
               transcationType: 'playwright',
               tagName: el ? el.tagName.toLowerCase() : 'input',
-              objectValue: r.value || '',
+              objectValue: recordedValue,
               propertiesName: r.label || '',
               realLabel: el && typeof getRealLabelByElement !== 'undefined'
                 ? (getRealLabelByElement(el) || '')
@@ -489,7 +545,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
               propertiesID: AutoFormFill._uuid(),
               timestamp: Date.now(),
               manualRecord: false,
-              attributes: { value: r.value || '', type: 'ATTRIBUTE' }
+              attributes: { value: recordedValue, type: 'ATTRIBUTE' },
+              options: recordedOptions
             }
           })
         }

@@ -7,7 +7,7 @@
 
 const LLMService = {
 
-  AUTO_FILL_SYSTEM_PROMPT: `你是一个表单填写助手。根据用户指令和当前页面的表单字段列表，返回 JSON 动作数组。
+  AUTO_FILL_SYSTEM_PROMPT: `你是一个表单填写助手。根据用户指令和当前页面的表单字段列表，返回包含 actions 数组的 JSON 对象。
 
 可用动作（只使用这几种，不要使用其他名称）：
 1. input — 填写输入框，参数 { "action": "input", "label": "字段标签", "value": "要填的值" }
@@ -17,21 +17,34 @@ const LLMService = {
 5. radio — 选中单选项，参数 { "action": "radio", "label": "字段标签", "option": "要选的选项" }
 6. select:tree — 树形选择。当前自动填表无法可靠定位树节点，不生成此动作；仅用于导出人工录制的树形选择。
 【核心规则 — 必须严格遵守】
-1. 对每个字段都必须返回一个动作，动作数量必须等于字段数量（除非 options 为空或已有值或 disabled，见下方规则）
+1. 对每个可填写且不应跳过的字段返回一个动作；已有值、disabled、selected、checkbox 或无法合法选择枚举值的字段不生成动作
 2. 如果字段已经有值（currentValue 非空），则跳过该字段（不生成动作）
 3. 如果字段 disabled 为 true，则跳过该字段（不生成动作）
 4. ★★★ 如果用户指令中明确提供了某个输入字段的值，无论该字段是否有按钮(hasButton)，都必须使用 input 直接填写输入框，绝对不要使用 click ★★★
 5. 只有当用户没有提供某个字段的值，且该字段 hasButton 为 true 时，才使用 click 去点击按钮打开选择器
-6. 用户指定了值的字段，必须使用用户指定的值
+6. 用户指定了输入框或日期字段的值时，使用用户指定的值；下拉框和单选框必须按后面的枚举规则转换，不能直接照抄不在 options 中的自然语言
 7. 用户未指定的字段，你自主决定
 8. selected 为 true 的字段表示下拉框已有选中值，跳过
 9. kind 为 'radio' 的字段，使用 radio 并从 options 中选一个合理的选项；kind 为 'checkbox' 的字段跳过，不生成动作
 
-【下拉框规则 (Element UI el-select)】
-- select:click 的 option 必须从该字段的 options 列表中选取
+【枚举字段规则（下拉框和单选框，最高优先级）】
+- options 是封闭枚举。只要 options 非空，select:click 或 radio 的 option 必须与其中某一项逐字完全相同
+- 用户指令中的自然语言只用于判断语义，不能直接作为 option。先选择语义最接近的枚举项，再原样复制该项文本
+- 禁止扩写、缩写、拼接、补充后缀或输出 options 中不存在的近义词。例如 options 含"高级"但不含"高级工程师"时，用户说"高级工程师"应输出"高级"
+- 注意区分包含关系，选择语义最具体的正确项。例如用户说"正高级工程师"且 options 同时含"高级"和"正高级"时，应输出"正高级"
+- 每个字段只能从自己的 options 中选择，不能把其他字段的值复制过来。例如"职称"的"中级职称"不能作为"职务"的 option；如果"职务" options 中有"中级"，应输出"中级"
+- 常见映射必须使用当前字段 options 中实际存在的文本："自有住房"→"自置"，"企业员工"→"工薪供职类"，"民营企业"→"企业"，"工程师"→"中级"
+- 对关系类字段，用户说"无"且当前字段没有"无"时，若存在"普通客户"，选择"普通客户"；不要把其他字段的"无"复制过来
+- 无法合理映射时：用户表达的是其他已知情况且有"其他"则选"其他"；用户未说明或信息不确定且有"未知"则选"未知"；否则跳过该字段，不要编造 option
 - options 列表是通过 Vue 组件实例读取到的真实选项，不是通过打开下拉框获取的
 - 若 options 列表为空（[]），但用户指令中明确提供了该字段的值，仍然生成 select:click 动作，option 使用用户提供的值（系统会尝试打开下拉框并匹配）
 - 若 options 列表为空且用户也未提供值，则跳过该字段（不生成动作）
+
+【输出前强制自检】
+- 逐个检查 select:click 和 radio 动作：对应 options 非空时，option 必须满足 options.includes(option)
+- 如果不满足，必须改成 options 中逐字一致的值；无法改正则删除该动作，绝不能输出非法 option
+- label 必须与字段列表中的 label 逐字一致
+- 最终只返回 {"actions":[...]} JSON 对象，不要 Markdown、解释、注释或其他文本
 
 【输入框规则】
 - 标签包含"姓名"→生成常见中文姓名（如"测试科技张三"）
@@ -51,7 +64,7 @@ const LLMService = {
 示例：
 输入字段：label:"客户名称",kind:input | label:"客户状态",kind:select,options:["正式","潜在"] | label:"证件类型",kind:select,options:["身份证","护照","营业执照"]
 指令：随机填写
-返回：[{"action":"input","label":"客户名称","value":"北京测试科技有限公司"},{"action":"select:click","label":"客户状态","option":"潜在"},{"action":"select:click","label":"证件类型","option":"身份证"}]`,
+返回：{"actions":[{"action":"input","label":"客户名称","value":"北京测试科技有限公司"},{"action":"select:click","label":"客户状态","option":"潜在"},{"action":"select:click","label":"证件类型","option":"身份证"}]}`,
 
   /**
    * 构建用户提示词，将字段列表和指令格式化为 prompt。
@@ -61,7 +74,7 @@ const LLMService = {
     let fieldLines = fields.map((f, i) => {
       let line = `${i + 1}. label: "${f.label}", kind: ${f.kind}`
       if (f.kind === 'select' || f.kind === 'radio' || f.kind === 'checkbox') {
-        line += `, options: [${(f.options || []).map(o => `"${o}"`).join(', ')}]`
+        line += `, options（封闭枚举，option 必须逐字取自此数组）: ${JSON.stringify(f.options || [])}`
       }
       if (f.placeholder && f.placeholder !== '请选择' && f.placeholder !== '请输入') line += `, placeholder: "${f.placeholder}"`
       if (f.required) line += `, required: true`

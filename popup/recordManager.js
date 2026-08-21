@@ -66,6 +66,19 @@ const RecordManager = {
     return (item.pageKey || '') + '\n' + (item.target || '') + '\n' + (item.anchorTarget || '')
   },
 
+  /** 将自动填表动作中的下拉选项同步到对应的扫描元素，保证两种导出都能使用。 */
+  syncActionOptionsToScanned(messageData) {
+    if (!messageData || !Array.isArray(messageData.options) || messageData.options.length === 0) return
+    const candidates = this.scannedElementList.filter(item => {
+      const samePage = (item.pageKey || '') === (messageData.pageKey || '')
+      const sameContext = (item.anchorTarget || '') === (messageData.anchorTarget || '')
+      const sameTarget = item.target === messageData.target
+      const sameName = item.propertiesName === messageData.propertiesName || item.realLabel === messageData.realLabel
+      return samePage && sameContext && (sameTarget || sameName)
+    })
+    for (const item of candidates) item.options = messageData.options.slice()
+  },
+
   /** 为记录分配/复用页面顺序号，保证同一页面的记录在排序中始终相邻。 */
   ensurePageOrder(item) {
     const pageKey = item && item.pageKey ? item.pageKey : ''
@@ -92,6 +105,8 @@ const RecordManager = {
         const screenshotPosition = existing.screenshotPosition
         this.scannedElementList[index] = Object.assign({}, existing, incoming, {
           propertiesID: existing.propertiesID,
+          options: Array.isArray(incoming.options) && incoming.options.length > 0
+            ? incoming.options : (Array.isArray(existing.options) ? existing.options : []),
           scanPosition: incoming.position || existing.scanPosition,
           screenshotPosition: screenshotPosition,
           position: screenshotPosition || incoming.position || existing.position,
@@ -558,6 +573,7 @@ const RecordManager = {
       const target = message.data.target
       const name = message.data.propertiesName
       this.currentPageKey = message.data.pageKey || this.currentPageKey
+      this.syncActionOptionsToScanned(message.data)
       // 同一 target+anchorTarget 已有记录：只合并可变字段，保留历史，标记为已录制。
       const byTarget = this.findContextRecordIndex(target, message.data.anchorTarget, message.data.pageKey)
       if (byTarget >= 0) {
@@ -863,6 +879,18 @@ const RecordManager = {
     /** 将内部记录转换为稳定的对接平台字段结构。 */
     function exportAction(item, parentId) {
       const attr = Object.assign({}, item.attributes || {})
+      const scanned = RecordManager.scannedElementList.find(candidate =>
+        (candidate.propertiesID && candidate.propertiesID === item.propertiesID) ||
+        (candidate.target === item.target &&
+          (candidate.anchorTarget || '') === (item.anchorTarget || '') &&
+          (candidate.pageKey || '') === (item.pageKey || '')) ||
+        (candidate.propertiesName === item.propertiesName &&
+          candidate.kind === 'select' &&
+          Utils.normalizeEventType(item.eventTypeValue) === 'select:click')
+      )
+      const options = Array.isArray(item.options) && item.options.length > 0
+        ? item.options
+        : (scanned && Array.isArray(scanned.options) ? scanned.options : [])
 
       ;['disabled', 'required', 'readonly'].forEach(key => {
         if (typeof item[key] !== 'undefined') attr[key] = item[key]
@@ -878,7 +906,7 @@ const RecordManager = {
         elementType: item.target || '',
         mothed: 'By.XPATH',
         target: item.target || '',
-        options: Array.isArray(item.options) ? item.options.slice() : [],
+        options: options.slice(),
         objectValue: item.objectValue || '',
         transcationType: 'playwright',
         realLabel: item.realLabel || '',

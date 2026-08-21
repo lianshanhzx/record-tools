@@ -136,6 +136,6 @@ const AutoFillUI = {
     }
     chrome.runtime.onMessage.addListener(listener)
     // 调用 popup/index.js → sendToContent
-    sendToContent(this.fillTabId, { type: 'executeActions', actions })
+    sendToContent(this.fillTabId, { type: 'executeActions', actions, fields })
   }
 }

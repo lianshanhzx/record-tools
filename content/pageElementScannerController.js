@@ -46,6 +46,21 @@ const PageElementScannerController = (function () {
     }
   }
 
+  // 在目标页面控制台执行 localStorage.setItem('__record_tools_debug__', '1') 可开启诊断日志。
+  function debugLog(event, data) {
+    try {
+      if (window.localStorage.getItem('__record_tools_debug__') !== '1') return
+      console.info('[RecordTools][Scanner]', event, Object.assign({
+        href: window.location.href,
+        route: typeof ElementGrouper !== 'undefined' && typeof ElementGrouper.getRouteIdentity === 'function'
+          ? ElementGrouper.getRouteIdentity(window.location)
+          : window.location.href,
+        popupOpen: popupOpen,
+        hidden: document.hidden
+      }, data || {}))
+    } catch (e) {}
+  }
+
   let popupOpen = false
   let scanOverlayCount = 0
   let scanLifecycleVersion = 0
@@ -661,6 +676,12 @@ const PageElementScannerController = (function () {
     if (!popupOpen ||
         (fullScanToken && fullScanToken.version === scanLifecycleVersion) ||
         (!force && now - lastScanTime < config.minIntervalMs)) {
+      debugLog('fullScan-skipped', {
+        force: force,
+        hasToken: !!fullScanToken,
+        elapsedSinceLastScan: now - lastScanTime,
+        currentCount: getScannedElementCount()
+      })
       return getScannedElementCount()
     }
     const scanToken = { version: scanLifecycleVersion }
@@ -682,6 +703,15 @@ const PageElementScannerController = (function () {
       activeAnchorByElement = new WeakMap()
       lastTrigger = null
       const results = scanRoot(document)
+      debugLog('fullScan-dom-state', {
+        formCount: document.querySelectorAll('input:not([type="hidden"]), textarea, select, .el-select, .el-date-editor, .tsscdatepicker, .el-radio, .el-checkbox').length,
+        buttonCount: document.querySelectorAll('button, a, [role="button"], .el-button').length,
+        formInsideTableCount: document.querySelectorAll('table input:not([type="hidden"]), table textarea, table select, table .el-select, table .el-date-editor, table .tsscdatepicker, table .el-radio, table .el-checkbox').length,
+        formInsideExcludedAreaCount: document.querySelectorAll('#app > div > section > div.headerbox input, #app > div > section > div.headerbox textarea, #app > div > section > div.headerbox select').length,
+        iframeCount: document.querySelectorAll('iframe, frame').length,
+        iframeSources: Array.from(document.querySelectorAll('iframe, frame')).map(frame => frame.src || '').slice(0, 10),
+        resultCount: results.length
+      })
       results.forEach(info => {
         info.pageKey = page.key
         info.pageUrl = page.url
@@ -692,6 +722,11 @@ const PageElementScannerController = (function () {
       })
 
       const count = notifyPopup(page.key)
+      debugLog('fullScan-completed', {
+        pageKey: page.key,
+        count: count,
+        scanDurationMs: Date.now() - now
+      })
       notifyScanStatus('completed', count)
       lastScanTime = Date.now()
       return count
@@ -815,6 +850,12 @@ const PageElementScannerController = (function () {
       }
 
       const count = mergeRegionResults(allResults)
+      debugLog('region-scan-completed', {
+        rootCount: visibleRoots.length,
+        resultCount: allResults.length,
+        count: count,
+        anchored: !!anchorElement
+      })
       notifyScanStatus('completed', count)
       pendingScanAnchor = null
       lastScanTime = Date.now()
@@ -832,6 +873,7 @@ const PageElementScannerController = (function () {
 
   function executeRouteScan() {
     if (!popupOpen || !routeScanPending) return
+    debugLog('route-scan-execute', { pending: routeScanPending })
     routeScanPending = false
     clearRouteScanTimers()
     fullScan(true)
@@ -843,9 +885,32 @@ const PageElementScannerController = (function () {
     routeScanTimer = setTimeout(executeRouteScan, config.routeQuietMs)
   }
 
+  /**
+   * 登记一次路由扫描。动作解析可能先于轮询发现路由变化，因此不能只依赖
+   * handleRouteChanged；否则 getCurrentPageContext 更新 currentRouteIdentity 后，
+   * 后续轮询会把这次跳转误判为已处理。
+   */
+  function requestRouteScan() {
+    if (!popupOpen) return
+    debugLog('route-scan-request', {
+      previousRoute: currentRouteIdentity,
+      nextRoute: getPageContext().routeIdentity
+    })
+    routeScanPending = true
+    clearRouteScanTimers()
+    scheduleRouteScan()
+    routeMaxWaitTimer = setTimeout(executeRouteScan, config.routeMaxWaitMs)
+  }
+
   function handleRouteChanged() {
     const nextPage = getPageContext()
     if (nextPage.routeIdentity === currentRouteIdentity) return
+
+    debugLog('route-changed', {
+      previousRoute: currentRouteIdentity,
+      nextRoute: nextPage.routeIdentity,
+      hasPendingScan: routeScanPending
+    })
 
     // 滚动定位或 DevTools/窗口尺寸变化引起的响应式路由更新不触发扫描。
     if (isPassiveLayoutChange()) {
@@ -1198,6 +1263,7 @@ const PageElementScannerController = (function () {
 
   async function onPopupOpened() {
     popupOpen = true
+    debugLog('popup-opened')
     startObserver()
     await fullScan()
     const count = (typeof Recorder !== 'undefined' && Recorder.scannedPageElements)
@@ -1225,7 +1291,16 @@ const PageElementScannerController = (function () {
 
   function getCurrentPageContext() {
     const latest = getPageContext()
-    if (!currentPageContext || latest.routeIdentity !== currentRouteIdentity) activatePageContext()
+    if (!currentPageContext || latest.routeIdentity !== currentRouteIdentity) {
+      const routeChanged = !!currentPageContext && latest.routeIdentity !== currentRouteIdentity
+      debugLog('page-context-activated', {
+        previousRoute: currentRouteIdentity,
+        nextRoute: latest.routeIdentity,
+        detectedBy: routeChanged ? 'getCurrentPageContext' : 'initialization'
+      })
+      activatePageContext()
+      if (routeChanged) requestRouteScan()
+    }
     return Object.assign({}, currentPageContext, {
       pageOrder: pageOrderMap.get(currentPageContext.key)
     })

@@ -408,7 +408,7 @@ const AutoFormFill = {
           trigger.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))
           trigger.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }))
           trigger.click()
-          setTimeout(() => this._pickOption(option, resolve), 600)
+          setTimeout(() => this._pickOption(option, resolve, label), 600)
           return
         }
       }
@@ -418,7 +418,7 @@ const AutoFormFill = {
           sel.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))
           sel.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }))
           sel.click()
-          setTimeout(() => this._pickOption(option, resolve), 600)
+          setTimeout(() => this._pickOption(option, resolve, label), 600)
           return
         }
       }
@@ -432,7 +432,12 @@ const AutoFormFill = {
    * 若选项不可见，尝试滚动下拉列表后重新查找。
    * 调用位置：autoFormFill.js → selectOption
    */
-  _pickOption(option, resolve) {
+  _pickOption(option, resolve, label) {
+    if (typeof option !== 'string' || !option.trim()) {
+      resolve('invalid-option:' + String(option))
+      return
+    }
+    option = option.trim()
     let dropdown = document
     for (const dd of document.querySelectorAll('.el-select-dropdown')) {
       if (dd.offsetParent !== null && !dd.classList.contains('is-hidden')) { dropdown = dd; break }
@@ -447,6 +452,22 @@ const AutoFormFill = {
       item.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))
       item.click()
       resolve('ok:' + item.textContent.trim())
+    }
+    const normalize = value => String(value || '').replace(/[\s　]+/g, '').toLowerCase()
+    const aliases = {
+      '居住状况': { '自有住房': '自置' },
+      '从业类型': { '企业员工': '工薪供职类', '单位员工': '工薪供职类', '个体工商户': '个私业主类' },
+      '单位性质': { '民营企业': '企业', '民营公司': '企业' },
+      '与本行关系': { '无': '普通客户', '无关联': '普通客户' },
+      '职务': { '工程师': '中级', '中级职称': '中级', '高级工程师': '高级', '正高级工程师': '正高级', '副高级工程师': '副高级' }
+    }
+    const requested = normalize(option)
+    const labelAliases = aliases[label] || {}
+    const exactAlias = Object.entries(labelAliases).find(([from]) => normalize(from) === requested)?.[1]
+    if (exactAlias) {
+      for (const item of items) {
+        if (normalize(item.textContent) === normalize(exactAlias)) { tryClick(item); return }
+      }
     }
     if (FIRST_ALIASES.includes(option.toLowerCase().trim())) {
       for (const item of items) {
@@ -474,13 +495,13 @@ const AutoFormFill = {
         }
         const hasEmpty = document.querySelector('.el-select-dropdown__empty')
         if (hasEmpty) { resolve('no-items'); return }
-        resolve('option-not-found:' + [...newItems].map(i => i.textContent.trim()).join(', '))
+        resolve('option-not-found: requested="' + option + '"; available=[' + [...newItems].map(i => i.textContent.trim()).join(', ') + ']')
       }, 300)
       return
     }
     const hasEmpty = document.querySelector('.el-select-dropdown__empty')
     if (hasEmpty) { resolve('no-items'); return }
-    resolve('option-not-found:' + [...items].map(i => i.textContent.trim()).join(', '))
+    resolve('option-not-found: requested="' + option + '"; available=[' + [...items].map(i => i.textContent.trim()).join(', ') + ']')
   },
 
   /**

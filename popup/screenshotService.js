@@ -60,17 +60,19 @@ const ScreenshotService = {
       }
 
       // ---- 2. 预估最终图片尺寸，提前拦截超长页面，避免浏览器内存耗尽 ----
-      // 内部滚动容器场景下，最后成图的逻辑高度 = 窗口高度 + 容器可滚动距离
-      // （外壳保持不变，仅滚动内容纵向延展）；文档滚动时直接用文档高度。
+      // 内部滚动容器场景下，最后成图的逻辑高度 = 窗口高度 + 有效滚动区间
+      // （外壳保持不变，仅滚动内容纵向延展）；文档滚动时为首屏加有效滚动区间。
       const estimatedWidth = Math.ceil((pageInfo.windowWidth || pageInfo.viewportWidth) * pageInfo.devicePixelRatio)
-      const logicalHeight = (pageInfo.captureRect ? (pageInfo.windowHeight || pageInfo.viewportHeight) : pageInfo.viewportHeight) + pageInfo.maxScrollY
+      const requestedCaptureStartY = typeof pageInfo.captureStartY === 'number' ? pageInfo.captureStartY : 0
+      const captureScrollRange = Math.max(0, pageInfo.maxScrollY - requestedCaptureStartY)
+      const logicalHeight = (pageInfo.captureRect ? (pageInfo.windowHeight || pageInfo.viewportHeight) : pageInfo.viewportHeight) + captureScrollRange
       const estimatedHeight = Math.ceil(logicalHeight * pageInfo.devicePixelRatio)
       if (estimatedWidth * estimatedHeight > screenshotMaxPixels) {
         throw new Error('页面过长，截图像素超过 ' + Math.floor(screenshotMaxPixels / 1000000) + ' 百万限制')
       }
 
       const captures = []
-      let requestedY = 0 // 下一次要滚动到的目标位置（逻辑像素，容器坐标）
+      let requestedY = requestedCaptureStartY // 下一次要滚动到的目标位置（逻辑像素，容器坐标）
       let documentHeight = pageInfo.captureRect
         ? pageInfo.documentHeight
         : pageInfo.viewportHeight + pageInfo.maxScrollY
@@ -91,8 +93,8 @@ const ScreenshotService = {
       // ---- 3. 滚动捕获循环：逐屏滚动 -> content 回报位置 -> 通知 background 截图 ----
       while (attempts < maxCaptures) {
         attempts++
-        // 进度估算：按“文档高度 / 可视高度”估算总屏数，仅用于展示。
-        const estimatedTotal = Math.max(1, Math.ceil(documentHeight / pageInfo.viewportHeight))
+        // 进度估算：按目标分组的有效截图区间估算总屏数，仅用于展示。
+        const estimatedTotal = Math.max(1, Math.ceil((maxScrollY - requestedCaptureStartY + pageInfo.viewportHeight) / pageInfo.viewportHeight))
         onProgress(captures.length + 1, estimatedTotal)
 
         // 滚动到目标位置，content 会在两帧 + 180ms 后回报实际滚动位置与容器几何信息。
@@ -162,6 +164,7 @@ const ScreenshotService = {
       // ---- 5. 拼接、上传截图，并按配置目录下载本地副本 ----
       pageInfo.documentHeight = documentHeight
       pageInfo.maxScrollY = maxScrollY
+      pageInfo.captureStartY = captures.length > 0 ? Math.min(...captures.map(capture => capture.y)) : requestedCaptureStartY
       const stitched = await this.stitch(captures, pageInfo, groupNode.captureItems || [])
       const blob = stitched.blob
       const filename = this.buildFilename(groupNode.propertiesName)
@@ -237,19 +240,21 @@ const ScreenshotService = {
    *     为非整数（如 125%、150%）时，各段分别取整导致接缝处重复或空一行。
    *
    * 最终图片布局：
-   *   - 文档滚动：高度 = logicalHeight × scale，每屏按实际内容位置依次贴入；
+   *   - 文档滚动：高度 = 目标滚动区间加一屏，每屏按相对起点依次贴入；
    *   - 内部滚动容器：横向保持全屏宽，高度 = 首屏自然高 + 滚动距离 × scale，
    *     页头/侧边保留，滚动内容插入，页脚（首屏中容器下方的区域）移到图片末尾。
    */
   async stitch(captures, pageInfo, captureItems) {
     const captureRect = pageInfo.captureRect
+    const captureStartY = typeof pageInfo.captureStartY === 'number' ? pageInfo.captureStartY : 0
+    const captureScrollRange = Math.max(0, pageInfo.maxScrollY - captureStartY)
     // 设备像素与逻辑像素的换算比例：以首屏自然宽除以窗口宽得到。
     const scale = captures[0].image.naturalWidth / (pageInfo.windowWidth || pageInfo.viewportWidth)
     // captureVisibleTab 只能取得当前视口，横向溢出内容不在本次纵向滚动截图范围内。
-    const logicalHeight = pageInfo.maxScrollY + pageInfo.viewportHeight
+    const logicalHeight = captureScrollRange + pageInfo.viewportHeight
     const width = captures[0].image.naturalWidth
     const height = captureRect
-      ? captures[0].image.naturalHeight + Math.ceil(pageInfo.maxScrollY * scale)
+      ? captures[0].image.naturalHeight + Math.ceil(captureScrollRange * scale)
       : Math.ceil(logicalHeight * scale)
     if (width * height > screenshotMaxPixels) throw new Error('页面实际截图尺寸超过浏览器处理上限')
 
@@ -288,8 +293,8 @@ const ScreenshotService = {
           ? (captureRect.left + rect.left - currentRect.left) * scale
           : elementLeft
         const logicalTop = currentRect
-          ? (captureRect.top + capture.y + rect.top - currentRect.top) * scale
-          : (capture.y + rect.top) * scale
+          ? (captureRect.top + capture.y - captureStartY + rect.top - currentRect.top) * scale
+          : (capture.y - captureStartY + rect.top) * scale
         elementBoxes.set(elementInfo.propertiesID, {
           left: logicalLeft,
           top: logicalTop,
@@ -363,16 +368,16 @@ const ScreenshotService = {
         : capture.y
 
       // 内容结束位置（首屏不可能超过最终图片底部）。
-      const contentEndY = Math.min(capture.y + currentViewportHeight, logicalHeight)
+      const contentEndY = Math.min(capture.y + currentViewportHeight, pageInfo.maxScrollY + pageInfo.viewportHeight)
 
       // 目标区域与源偏移：
       //   - captureStartPixel：当前屏顶部在最终画布上对应的设备像素行；
       //   - destinationY：新内容实际应贴入的设备像素行（即 newContentY 对应位置）；
       //   - sourceOffsetY：因重叠区跳过而需要在源图像上向下偏移的像素量。
       // 两者都用绝对坐标换算后取整，保证与上一屏的收尾边界严格衔接，不重不漏。
-      const captureStartPixel = Math.round(capture.y * scale)
-      const destinationY = Math.max(0, Math.round(newContentY * scale))
-      const destinationEndY = Math.max(destinationY, Math.round(contentEndY * scale))
+      const captureStartPixel = Math.round((capture.y - captureStartY) * scale)
+      const destinationY = Math.max(0, Math.round((newContentY - captureStartY) * scale))
+      const destinationEndY = Math.max(destinationY, Math.round((contentEndY - captureStartY) * scale))
       const sourceOffsetY = Math.max(0, destinationY - captureStartPixel)
 
       // 内部滚动容器还需在水平方向平移到容器的目标列位置。
@@ -406,7 +411,7 @@ const ScreenshotService = {
         const bottom = rect.bottom * scale
         const insideScrollingContent = left >= rectLeft && right <= rectRight && top >= rectTop && bottom <= rectBottom
         if (!insideScrollingContent && left >= 0 && top >= 0 && right <= width && bottom <= captures[0].image.naturalHeight) {
-          const movedTop = top >= rectBottom ? top + pageInfo.maxScrollY * scale : top
+          const movedTop = top >= rectBottom ? top + captureScrollRange * scale : top
           elementBoxes.set(elementInfo.propertiesID, { left, top: movedTop, width: rect.width * scale, height: rect.height * scale })
         }
       })
