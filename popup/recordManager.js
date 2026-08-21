@@ -900,7 +900,7 @@ const RecordManager = {
         propertiesID: item.propertiesID,
         propertiesPID: parentId,
         type: 'ele',
-        propertiesName: item.propertiesName || '',
+        propertiesName: (item.propertiesName || '').replace("/", "或"),
         eventTypeValue: Utils.normalizeEventType(item.eventTypeValue),
         eventTypeName: Utils.getEventTypeName(item.eventTypeValue),
         elementType: item.target || '',

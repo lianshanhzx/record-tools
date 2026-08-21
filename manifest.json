@@ -28,14 +28,12 @@
             "128": "/icons/128.png"
         }
     },
-   
 
     "externally_connectable": {
         "matches": [
           "http://localhost:11001/*",
-          "http://101.89.127.196/*",
-          "http://101.89.127.199/*",
-          "http://11.1.198.131/*"
+          "http://test.atp.tansun.com.cn/*",
+          "http://prod.atp.tansun.com.cn/*"
          ]
     },
       
