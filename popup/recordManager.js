@@ -939,7 +939,7 @@ const RecordManager = {
         regionLabel: '',
         rect: JSON.stringify({}),
         url: node.url || '',
-        screenshots: (screenshots[node.key] || []).slice()
+        screenCapture: (screenshots[node.key] || []).slice()
       })
 
       node.entries.forEach(entry => {
