@@ -912,7 +912,7 @@ const RecordManager = {
         realLabel: item.realLabel || '',
         regionId: '',
         regionLabel: '',
-        rect: item.screenshotPosition || item.rect || item.scanPosition || item.position || {},
+        rect: JSON.stringify(item.screenshotPosition || item.rect || item.scanPosition || item.position || {}),
         positionStatus: item.positionStatus || (item.screenshotPosition ? 'captured' : 'not-captured'),
         attr: attr
       }
@@ -937,7 +937,7 @@ const RecordManager = {
         realLabel: '',
         regionId: '',
         regionLabel: '',
-        rect: {},
+        rect: JSON.stringify({}),
         url: node.url || '',
         screenshots: (screenshots[node.key] || []).slice()
       })
