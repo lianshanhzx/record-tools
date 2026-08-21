@@ -669,7 +669,7 @@
         context.font = Math.max(14, lineWidth * 5) + 'px Arial'
 
         selected.forEach((element, index) => {
-          const rect = element.rect
+          const rect = JSON.parse(element.rect) //将字符串转为对象
           const x = rect.x1 * canvas.width
           const y = rect.y1 * canvas.height
           const width = (rect.x2 - rect.x1) * canvas.width
