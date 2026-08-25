@@ -205,8 +205,10 @@ function initRecordControls() {
  * 调用位置：popup/index.js → main
  */
 function initBottomActions() {
-  // 调用 popup/recordManager.js → RecordManager.clearAll
+  //重录, 调用 popup/recordManager.js → RecordManager.clearAll
   $('#clearBtn').click(async function () {
+    if (!confirm('确定重录所有操作吗？此操作无法撤销。')) return
+
     RecordManager.clearAll()
     // 重录时通知 content script 清空扫描结果并重新全量扫描
     const tab = await getCurrentTab()
