@@ -65,12 +65,21 @@ const UploadService = {
     })
   },
 
-  /**
-   * 下载当前录制的动作列表为 JSON 文件。
-   * 调用位置：popup/index.js → downloadBtn 点击
-   */
-  downloadActions() {
-    Utils.saveAsBlobFile(Utils.txt2Blob(Utils.actionTree2Json(RecordManager.buildExportGroups(), RecordManager.recordDataUrl)), 'result.json')
+  /** 生成当前录制动作的 JSON 文本。 */
+  buildActionExportContent() {
+    return Utils.actionTree2Json(RecordManager.buildExportGroups(), RecordManager.recordDataUrl)
+  },
+
+  /** 下载当前录制的动作列表为 JSON 文件。 */
+  downloadActionsJson() {
+    const content = this.buildActionExportContent()
+    Utils.saveAsBlobFile(new Blob([content], { type: 'application/json;charset=utf-8' }), 'result.json')
+  },
+
+  /** 下载当前录制的动作列表为 TXT 文件，内容仍采用 JSON 数据结构。 */
+  downloadActionsTxt() {
+    const content = this.buildActionExportContent()
+    Utils.saveAsBlobFile(new Blob([content], { type: 'text/plain;charset=utf-8' }), 'result.txt')
   },
 
   /**

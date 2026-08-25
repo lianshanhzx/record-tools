@@ -215,9 +215,14 @@ function initBottomActions() {
     }
   })
 
-  // 调用 popup/uploadService.js → UploadService.downloadActions
-  $('#downloadBtn').click(function () {
-    UploadService.downloadActions()
+  // 调用 popup/uploadService.js → UploadService.downloadActionsJson
+  $('#downloadJsonBtn').click(function () {
+    UploadService.downloadActionsJson()
+  })
+
+  // 调用 popup/uploadService.js → UploadService.downloadActionsTxt
+  $('#downloadTxtBtn').click(function () {
+    UploadService.downloadActionsTxt()
   })
 
   // 调用 popup/uploadService.js → UploadService.downloadAllElements

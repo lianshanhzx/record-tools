@@ -540,16 +540,24 @@ const RecordManager = {
   },
 
   /**
-   * 同名去重只在同一锚点上下文内执行，不同按钮打开的复用弹窗保留各自原始字段名。
+   * 为操作分配全列表唯一名称。分组和锚点上下文不参与判断，避免导出时出现重名字段。
    */
-  computedSameContextName(list, name, anchorTarget, pageKey) {
-    const anchor = anchorTarget || ''
-    return list.filter(item => {
-      if ((item.anchorTarget || '') !== anchor ||
-          (item.pageKey || '') !== (pageKey || '') || !item.propertiesName) return false
-      const arr = item.propertiesName.split('-')
-      return arr[0] === name
-    }).length
+  getUniquePropertiesName(name, ignoredItem) {
+    const baseName = name || ''
+    if (!baseName) return baseName
+    const usedNames = new Set(this.recordActionList
+      .filter(item => item !== ignoredItem && item.propertiesName)
+      .map(item => item.propertiesName))
+    const currentName = ignoredItem && ignoredItem.propertiesName
+    if (currentName === baseName ||
+        (usedNames.has(baseName) && new RegExp('^' + baseName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '_\\d+$').test(currentName))) {
+      return currentName
+    }
+    if (!usedNames.has(baseName)) return baseName
+
+    let index = 1
+    while (usedNames.has(baseName + '_' + index)) index++
+    return baseName + '_' + index
   },
 
   /**
@@ -557,7 +565,7 @@ const RecordManager = {
    * 调用位置：popup/index.js → chrome.runtime.onMessage 监听
    *
    * 三条分支：
-   *   - addActionData：人工录制动作入库（命中上下文则合并字段，否则去重命名后追加）。
+   *   - addActionData：人工录制动作入库（命中上下文则合并字段，否则全列表去重命名后追加）。
    *   - addScannedElements：扫描元素入库；replacePageKey 表示页面切换，先清掉该页的
    *     旧扫描记录（但保留 manualRecord 的人工动作），再合并新扫描快照。
    *   - startRecord：仅被过滤，说明存在该消息类型但此处不处理（参数未使用）。
@@ -577,35 +585,32 @@ const RecordManager = {
       // 同一 target+anchorTarget 已有记录：只合并可变字段，保留历史，标记为已录制。
       const byTarget = this.findContextRecordIndex(target, message.data.anchorTarget, message.data.pageKey)
       if (byTarget >= 0) {
+        const existing = this.recordActionList[byTarget]
         this.recordActionList[byTarget] = {
-          ...this.recordActionList[byTarget],
+          ...existing,
           objectValue: message.data.objectValue,
           eventTypeValue: message.data.eventTypeValue,
           eventTypeName: message.data.eventTypeName,
-          propertiesName: message.data.propertiesName,
-          realLabel: message.data.realLabel || this.recordActionList[byTarget].realLabel || '',
-          rect: message.data.rect || this.recordActionList[byTarget].rect || {},
+          propertiesName: this.getUniquePropertiesName(message.data.propertiesName, existing),
+          realLabel: message.data.realLabel || existing.realLabel || '',
+          rect: message.data.rect || existing.rect || {},
           mothed: message.data.mothed || 'By.XPATH',
           elementType: message.data.target,
           transcationType: 'playwright',
-          group: message.data.group || this.recordActionList[byTarget].group,
-          kind: message.data.kind || this.recordActionList[byTarget].kind,
-          scanIndex: typeof message.data.scanIndex === 'number' ? message.data.scanIndex : this.recordActionList[byTarget].scanIndex,
-          pageUrl: message.data.pageUrl || this.recordActionList[byTarget].pageUrl,
-          pageOrder: typeof message.data.pageOrder === 'number' ? message.data.pageOrder : this.recordActionList[byTarget].pageOrder,
+          group: message.data.group || existing.group,
+          kind: message.data.kind || existing.kind,
+          scanIndex: typeof message.data.scanIndex === 'number' ? message.data.scanIndex : existing.scanIndex,
+          pageUrl: message.data.pageUrl || existing.pageUrl,
+          pageOrder: typeof message.data.pageOrder === 'number' ? message.data.pageOrder : existing.pageOrder,
           options: message.data.options && message.data.options.length > 0
-            ? message.data.options : this.recordActionList[byTarget].options,
-          anchorTarget: message.data.anchorTarget || this.recordActionList[byTarget].anchorTarget,
-          anchorPropertiesName: message.data.anchorPropertiesName || this.recordActionList[byTarget].anchorPropertiesName,
+            ? message.data.options : existing.options,
+          anchorTarget: message.data.anchorTarget || existing.anchorTarget,
+          anchorPropertiesName: message.data.anchorPropertiesName || existing.anchorPropertiesName,
           recorded: true,
-          manualRecord: this.recordActionList[byTarget].manualRecord || isManualRecord
+          manualRecord: existing.manualRecord || isManualRecord
         }
       } else {
-        // 新记录：同一锚点上下文内已存在同名元素时，按"名称-N"追加后缀去重。
-        if (this.recordActionList.length > 0) {
-          const cnt = this.computedSameContextName(this.recordActionList, name, message.data.anchorTarget, message.data.pageKey)
-          if (cnt > 0) message.data.propertiesName = name + '-' + cnt
-        }
+        message.data.propertiesName = this.getUniquePropertiesName(name)
         message.data.recorded = true
         message.data.manualRecord = isManualRecord
         this.recordActionList.push(message.data)
@@ -641,7 +646,7 @@ const RecordManager = {
             ...existing,
             eventTypeValue: existing.manualRecord ? existing.eventTypeValue : el.eventTypeValue,
             eventTypeName: existing.manualRecord ? existing.eventTypeName : el.eventTypeName,
-            propertiesName: el.propertiesName,
+            propertiesName: this.getUniquePropertiesName(el.propertiesName, existing),
             realLabel: el.realLabel || existing.realLabel || '',
             rect: el.rect || existing.rect || {},
             mothed: el.mothed || 'By.XPATH',
@@ -663,10 +668,7 @@ const RecordManager = {
             manualRecord: existing.manualRecord || false
           }
         } else {
-          if (this.recordActionList.length > 0) {
-            const cnt = this.computedSameContextName(this.recordActionList, name, el.anchorTarget, el.pageKey)
-            if (cnt > 0) el.propertiesName = name + '-' + cnt
-          }
+          el.propertiesName = this.getUniquePropertiesName(name)
           // 扫描阶段：按钮默认隐藏，其他元素默认显示；均未人工录制
           el.recorded = !this.isButtonRecord(el)
           el.manualRecord = false
@@ -875,6 +877,32 @@ const RecordManager = {
    */
   buildExportGroups() {
     const result = []
+    const usedNames = new Set()
+    const groupNames = new Map()
+
+    /** 按导出顺序分配全局唯一名称，重复项依次追加 _1、_2。 */
+    function getUniqueExportName(name) {
+      const baseName = (name || '').replace("/", "或")
+      if (!baseName || !usedNames.has(baseName)) {
+        if (baseName) usedNames.add(baseName)
+        return baseName
+      }
+
+      let index = 1
+      while (usedNames.has(baseName + '_' + index)) index++
+      const uniqueName = baseName + '_' + index
+      usedNames.add(uniqueName)
+      return uniqueName
+    }
+
+    // 先预留全部分组名称，确保重复页面组稳定命名为“主页面_1”等。
+    function reserveGroupNames(node) {
+      groupNames.set(node, getUniqueExportName(node.propertiesName))
+      node.entries.forEach(entry => {
+        if (entry.kind === 'group') reserveGroupNames(entry.node)
+      })
+    }
+    this.displayRoots.forEach(reserveGroupNames)
 
     /** 将内部记录转换为稳定的对接平台字段结构。 */
     function exportAction(item, parentId) {
@@ -900,7 +928,7 @@ const RecordManager = {
         propertiesID: item.propertiesID,
         propertiesPID: parentId,
         type: 'ele',
-        propertiesName: (item.propertiesName || '').replace("/", "或"),
+        propertiesName: getUniqueExportName(item.propertiesName),
         eventTypeValue: Utils.normalizeEventType(item.eventTypeValue),
         eventTypeName: Utils.getEventTypeName(item.eventTypeValue),
         elementType: item.target || '',
@@ -926,7 +954,7 @@ const RecordManager = {
         propertiesPID: parentId,
         type: node.type,
         key: node.key,
-        propertiesName: node.propertiesName,
+        propertiesName: groupNames.get(node),
         eventTypeValue: 'click',
         eventTypeName: '点击',
         elementType: '',
@@ -989,7 +1017,10 @@ const RecordManager = {
 
     // 保存编辑后的名称
     $('#saveNameBtn').click(function () {
-      self.currentRecordInfo.propertiesName = $('#editName').val()
+      self.currentRecordInfo.propertiesName = self.getUniquePropertiesName(
+        $('#editName').val(),
+        self.currentRecordInfo
+      )
       self.updateRecorder()
     })
 
