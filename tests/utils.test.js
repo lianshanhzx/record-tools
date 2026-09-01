@@ -47,6 +47,32 @@
     assert(Utils.getEventTypeName('radio') === '单选', '单选名称错误')
   }))
 
+  testResults.push(run('读取隐藏天元配置弹窗的组件编号', function () {
+    const root = document.createElement('div')
+    root.innerHTML = '<div role="dialog" aria-label="天元相关配置" style="display:none"><p><span>组件编号：</span><span>ZJJK00066153</span></p></div>'
+    assert(Utils.getTianyuanComponentId(root) === 'ZJJK00066153', '未读取到组件编号')
+  }))
+
+  testResults.push(run('天元配置弹窗缺少组件编号时返回空值', function () {
+    const root = document.createElement('div')
+    root.innerHTML = '<div role="dialog" aria-label="天元相关配置"><p><span>页面名称：</span><span>对公客户管理页</span></p></div>'
+    assert(Utils.getTianyuanComponentId(root) === '', '不应返回组件编号')
+  }))
+
+  testResults.push(run('天元配置弹窗不存在时返回空值', function () {
+    const root = document.createElement('div')
+    assert(Utils.getTianyuanComponentId(root) === '', '不应返回组件编号')
+  }))
+
+  testResults.push(run('pageId 回退格式', function () {
+    assert(Utils.generatePageId(1725091234567) === 'CJLZ1725091234567', 'pageId 格式错误')
+  }))
+
+  testResults.push(run('导出包含 pageId', function () {
+    const data = JSON.parse(Utils.actionTree2Json([], 'https://example.test', 'ZJJK00066153'))
+    assert(data.pageId === 'ZJJK00066153', '导出缺少 pageId')
+  }))
+
   const passedCount = testResults.filter(Boolean).length
   const passed = passedCount === testResults.length
   summary.className = passed ? 'pass' : 'fail'

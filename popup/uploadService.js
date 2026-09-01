@@ -67,7 +67,7 @@ const UploadService = {
 
   /** 生成当前录制动作的 JSON 文本。 */
   buildActionExportContent() {
-    return Utils.actionTree2Json(RecordManager.buildExportGroups(), RecordManager.recordDataUrl)
+    return Utils.actionTree2Json(RecordManager.buildExportGroups(), RecordManager.recordDataUrl, RecordManager.pageId)
   },
 
   /** 下载当前录制的动作列表为 JSON 文件。 */
@@ -121,7 +121,7 @@ const UploadService = {
    */
   uploadTexResult(zdhData) {
     return new Promise((resolve, reject) => {
-      const file = new File([Utils.txt2Blob(Utils.actionTree2Json(RecordManager.buildExportGroups(), RecordManager.recordDataUrl))], 'result', { type: 'text/plain' })
+      const file = new File([Utils.txt2Blob(this.buildActionExportContent())], 'result', { type: 'text/plain' })
       const fd = new FormData()
       fd.append('file', file)
       fd.append('mothed', 'By.XPATH')

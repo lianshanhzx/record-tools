@@ -60,15 +60,35 @@ function getEventTypeName(value) {
   }
 }
 
+/** 从“天元相关配置”弹窗读取组件编号或者场景编号；弹窗可处于隐藏状态。 */
+function getTianyuanComponentId(root) {
+  const documentRoot = root || document
+  const dialogs = documentRoot.querySelectorAll('[role="dialog"][aria-label="天元相关配置"]')
+  for (const dialog of dialogs) {
+    for (const row of dialog.querySelectorAll('p')) {
+      const spans = row.querySelectorAll('span')
+      if (spans.length < 2 || (spans[0].textContent.trim() !== '组件编号：' && spans[0].textContent.trim() !== '场景编号：')) continue
+      const componentId = spans[1].textContent.trim()
+      if (componentId) return componentId
+    }
+  }
+  return ''
+}
+
+/** 生成一次录制会话使用的页面标识。 */
+function generatePageId(timestamp) {
+  return 'CJLZ' + String(timestamp == null ? Date.now() : timestamp)
+}
+
 /**
  * 将平行节点数组转换为自动化平台 JSON 格式
  * @param {Array} groups 通过 propertiesID/propertiesPID 表达层级的分组和操作节点
  * @param {string} url 录制页面 URL
  * @returns {string}
  */
-function actionTree2Json(groups, url) {
+function actionTree2Json(groups, url, pageId) {
   return JSON.stringify({
-    id: uuid(), name: 'test', url,
+    id: uuid(), name: 'test', pageId: pageId || '', url,
     transcationProperties: groups || []
   })
 }
@@ -95,7 +115,7 @@ function saveAsBlobFile(blob, name) {
 }
 
 // 支持 CommonJS 和浏览器全局变量两种导出方式
-const Utils = { uuid, normalizeEventType, getEventTypeName, actionTree2Json, txt2Blob, saveAsBlobFile }
+const Utils = { uuid, normalizeEventType, getEventTypeName, getTianyuanComponentId, generatePageId, actionTree2Json, txt2Blob, saveAsBlobFile }
 
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = Utils

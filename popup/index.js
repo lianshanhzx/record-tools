@@ -174,6 +174,7 @@ function initRecordControls() {
   async function startRecording() {
     const tab = await getCurrentTab()
     if (!tab || !tab.id) return
+    await initializePageId(tab.id)
     const resp = await sendToContent(tab.id, { type: 'startRecording' })
     if (resp) setRecordingUI('recording')
   }
@@ -200,6 +201,15 @@ function initRecordControls() {
   })
 }
 
+/** 在一次录制开始时读取组件编号；无有效值时生成回退 pageId。 */
+async function initializePageId(tabId) {
+  if (RecordManager.pageId) return RecordManager.pageId
+  const response = await sendToContent(tabId, { type: 'getTianyuanComponentId' })
+  const componentId = response && response.componentId ? String(response.componentId).trim() : ''
+  RecordManager.pageId = componentId || Utils.generatePageId()
+  return RecordManager.pageId
+}
+
 /**
  * 初始化底部操作按钮（重录/下载/提交）。
  * 调用位置：popup/index.js → main
@@ -213,7 +223,10 @@ function initBottomActions() {
     // 重录时通知 content script 清空扫描结果并重新全量扫描
     const tab = await getCurrentTab()
     if (tab && tab.id) {
+      await initializePageId(tab.id)
       sendToContent(tab.id, { type: 'clearAndRescan' })
+    } else {
+      RecordManager.pageId = Utils.generatePageId()
     }
   })
 

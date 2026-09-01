@@ -367,6 +367,10 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     })
     return true;
   }
+  if (request.type === 'getTianyuanComponentId') {
+    sendResponse({ componentId: Utils.getTianyuanComponentId(document) })
+    return false
+  }
   // 获取开始录制时扫描到的页面元素 → 读取 Recorder.scannedPageElements
   if (request.type === 'getScannedElements') {
     sendResponse({ elements: Recorder.scannedPageElements || [] });

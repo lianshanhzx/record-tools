@@ -32,6 +32,8 @@ const RecordManager = {
   currentRecordInfo: {},
   // 最近一次 startRecord 上报的页面数据地址（页面级 URL 标识）。
   recordDataUrl: '',
+  // 当前录制会话的页面标识，仅在开始录制或重录时初始化。
+  pageId: '',
   // key 为分组节点 key，value 为该分组下的截图相对地址数组。
   groupScreenshots: {},
   // 分组树索引：node.key -> 展示树节点，用于按 key 快速反查分组。
@@ -697,6 +699,7 @@ const RecordManager = {
     this.scannedElementList = []
     this.currentRecordInfo = {}
     this.recordDataUrl = ''
+    this.pageId = ''
     this.groupScreenshots = {}
     this.displayGroupMap = new Map()
     this.displayRoots = []
