@@ -17,7 +17,7 @@
  */
 
 // 选择器实现版本号：算法行为变化时递增，便于排查历史数据与算法差异。
-const SMART_SELECTOR_VERSION = 2;
+const SMART_SELECTOR_VERSION = 3;
 // 单次生成的候选上限。评分筛选只保留最优的一部分，防止结构路径候选挤占有效候选。
 const SMART_SELECTOR_MAX_CANDIDATES = 40;
 // 结构路径候选向上搜索的最大祖先深度，限制生成量并避免路径过长。
@@ -498,6 +498,7 @@ class SmartSelector {
   collectTableRowCandidates() {
     const row = this.element.closest('tr');
     if (!row) return;
+    const table = row.closest('table');
     const leaf = this.getSemanticLeaf(this.element);
     const ownText = normalizeSelectorText(this.element.innerText || this.element.textContent, 40);
     const cells = Array.from(row.querySelectorAll('th, td'));
@@ -513,6 +514,126 @@ class SmartSelector {
     anchors.forEach(text => {
       this.addCandidate(`//tr[.//*[normalize-space(.)=${quoteXPathValue(text)}]]//${leaf}`, 'table_row_text', 79, { scope: 'table_row' });
     });
+
+    // Add table-scoped candidates using business columns. The legacy row-text
+    // candidates above remain unchanged for compatibility and as a fallback.
+    if (!table) return;
+    const tableXPath = this.getTableScopeXPath(table);
+    if (!tableXPath) return;
+    const headers = this.getTableHeaders(table);
+    const rowKeys = this.getTableRowKeys(row, headers, ownText);
+    if (rowKeys.length === 0) return;
+    const targetCell = this.element.closest('td, th');
+    const targetCellIndex = targetCell ? Array.from(row.children)
+      .filter(cell => /^(TD|TH)$/.test(cell.tagName))
+      .indexOf(targetCell) : -1;
+    const targetLeaf = targetCellIndex >= 0
+      ? `*[self::td or self::th][${targetCellIndex + 1}]//${leaf}`
+      : `//${leaf}`;
+
+    // Try the most meaningful single columns first, then progressively add
+    // other columns until the row can be uniquely identified.
+    const preferredKeys = rowKeys.slice().sort((a, b) => b.score - a.score);
+    const keySets = preferredKeys.map(key => [key]);
+    let hasUniquePrimaryKey = false;
+    preferredKeys.forEach(key => {
+      const predicates = [`*[self::td or self::th][${key.index + 1}][normalize-space(.)=${quoteXPathValue(key.value)}]`];
+      const rowXPath = `${tableXPath}//tr[${predicates.join(' and ')}]`;
+      if (key.kind !== 'text' && this.evaluateXPathForElement(rowXPath, row).verified) {
+        hasUniquePrimaryKey = true;
+      }
+    });
+    // Generate combinations rather than only taking the first three ranked
+    // columns: a later status/type column may be the one that disambiguates
+    // duplicate number + name pairs.
+    if (!hasUniquePrimaryKey) {
+      for (let size = 2; size <= Math.min(3, preferredKeys.length); size++) {
+        const appendCombinations = (start, selected) => {
+          if (selected.length === size) {
+            keySets.push(selected.slice());
+            return;
+          }
+          for (let index = start; index < preferredKeys.length; index++) {
+            appendCombinations(index + 1, selected.concat(preferredKeys[index]));
+          }
+        };
+        appendCombinations(0, []);
+      }
+    }
+    for (const keys of keySets) {
+      const predicates = keys.map(key =>
+        `*[self::td or self::th][${key.index + 1}][normalize-space(.)=${quoteXPathValue(key.value)}]`
+      );
+      const rowXPath = `${tableXPath}//tr[${predicates.join(' and ')}]`;
+      const strategy = keys.length === 1
+        ? (keys[0].kind === 'number' ? 'table_scoped_row_number' :
+          (keys[0].kind === 'name' ? 'table_scoped_row_name' : 'table_scoped_row_text'))
+        : 'table_scoped_row_composite';
+      const score = keys.reduce((total, key) => total + key.score, 0) - (keys.length - 1) * 5;
+      this.addCandidate(`${rowXPath}/${targetLeaf}`, strategy, score, {
+        scope: 'table_row',
+        warnings: keys.length > 1 ? ['使用多个表格列进行行消歧'] : []
+      });
+    }
+  }
+
+  /** Return a stable table scope when one is available; the bare table is a fallback. */
+  getTableScopeXPath(table) {
+    const tagName = table.tagName.toLowerCase();
+    for (const attr of this.testAttributes.concat(['id', 'aria-label'])) {
+      const value = table.getAttribute(attr);
+      if (value && value.length <= 80 && dynamicValuePenalty(value) < 80) {
+        return `//${tagName}[@${attr}=${quoteXPathValue(value)}]`;
+      }
+    }
+
+    const headerTexts = this.getTableHeaders(table)
+      .map(header => header.value)
+      .filter(Boolean)
+      .slice(0, 2);
+    if (headerTexts.length) {
+      const headerPredicate = headerTexts
+        .map(text => `.//th[normalize-space(.)=${quoteXPathValue(text)}]`)
+        .join(' and ');
+      return `//${tagName}[${headerPredicate}]`;
+    }
+
+    return this.document.querySelectorAll('table').length === 1 ? `//${tagName}` : '';
+  }
+
+  /** Extract normalized header labels and their column indexes. */
+  getTableHeaders(table) {
+    const headerRow = table.querySelector('thead tr') || Array.from(table.querySelectorAll('tr'))
+      .find(candidate => candidate.querySelector(':scope > th'));
+    if (!headerRow) return [];
+    return Array.from(headerRow.children).map((cell, index) => ({
+      index: index,
+      value: normalizeSelectorText(cell.innerText || cell.textContent, 40)
+    }));
+  }
+
+  /** Build ranked row keys, including fallback data from non-semantic columns. */
+  getTableRowKeys(row, headers, ownText) {
+    const cells = Array.from(row.children).filter(cell => /^(TD|TH)$/.test(cell.tagName));
+    const keys = [];
+    const numberHeader = /编号|编码|代码|单号|订单号|合同号|客户号|商品号|流水号|序号/;
+    const nameHeader = /名称|姓名|客户|商品|项目|标题|名称/;
+    const seen = new Set();
+
+    cells.forEach((cell, index) => {
+      const value = normalizeSelectorText(cell.innerText || cell.textContent, 40);
+      const header = headers[index] ? headers[index].value : '';
+      if (!value || value === ownText || value.length > 30 || isDynamicText(value)) return;
+      if (/^\d+$/.test(value) || /^\d{4}[-/]\d{1,2}[-/]\d{1,2}/.test(value)) return;
+      const kind = numberHeader.test(header) ? 'number' : (nameHeader.test(header) ? 'name' : 'text');
+      const score = kind === 'number' ? 96 : (kind === 'name' ? 92 : 76);
+      const key = `${index}:${value}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        keys.push({ index: index, value: value, kind: kind, score: score });
+      }
+    });
+    return keys.slice(0, 6);
   }
 
   /**

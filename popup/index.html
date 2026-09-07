@@ -47,7 +47,16 @@
             <span>操作列表</span>
             <span class="scan-status" id="scanStatus" aria-live="polite"></span>
         </div>
+        <div class="replay-toolbar" id="replayToolbar">
+            <label class="select-all-label"><input type="checkbox" id="selectAllRecords"> 全选</label>
+            <span class="replay-selection" id="replaySelection">已选择 0 条</span>
+            <button type="button" id="replayBtn" class="replay-btn">回放验证</button>
+            <span class="replay-empty-value-note">没有值的表单项在回放验证的时候将会跳过</span>
+            <button type="button" id="cancelReplayBtn" class="replay-cancel-btn" style="display:none">取消回放</button>
+            <span class="replay-status" id="replayStatus" aria-live="polite"></span>
+        </div>
         <div class="list-head-row">
+            <span class="col-select"></span>
             <span class="col-seq">序号</span>
             <span class="col-cmd">事件类型</span>
             <span class="col-name">业务对象名称</span>
@@ -132,11 +141,31 @@
                     <p>用于上传全页截图的服务地址。</p>
                     <label for="settingsUploadBaseUrl">服务地址</label>
                     <input type="url" id="settingsUploadBaseUrl" placeholder="http://example.com:11002">
+                    <label for="settingsUploadAccessToken">access_token</label>
+                    <input type="text" id="settingsUploadAccessToken" placeholder="请输入 access_token" autocomplete="off">
                 </section>
             </div>
             <div class="settings-footer">
                 <span id="settingsStatus" class="config-msg" aria-live="polite"></span>
                 <button type="button" id="saveSettingsBtn" class="settings-save">保存配置</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="downloadNameDialog" class="download-name-dialog" aria-hidden="true">
+        <div class="download-name-panel" role="dialog" aria-modal="true" aria-labelledby="downloadNameTitle">
+            <div class="download-name-header">
+                <strong id="downloadNameTitle">下载文件</strong>
+                <button type="button" id="closeDownloadNameBtn" aria-label="关闭下载窗口">关闭</button>
+            </div>
+            <div class="download-name-body">
+                <label for="downloadNameInput">文件名称</label>
+                <input id="downloadNameInput" type="text" autocomplete="off" placeholder="请输入文件名称">
+                <span id="downloadNameError" class="download-name-error" aria-live="polite"></span>
+            </div>
+            <div class="download-name-footer">
+                <button type="button" id="cancelDownloadNameBtn">取消</button>
+                <button type="button" id="confirmDownloadNameBtn" class="primary">确认下载</button>
             </div>
         </div>
     </div>
@@ -146,6 +175,7 @@
 <script src="../libs/utils.js"></script>
 <script src="../libs/elementGrouper.js"></script>
 <script src="./recordManager.js"></script>
+<script src="./replayService.js"></script>
 <script src="./settings.js"></script>
 <script src="./autoFill.js"></script>
 <script src="./uploadService.js"></script>

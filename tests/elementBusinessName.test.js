@@ -49,6 +49,28 @@
     assert(getRealLabelByElement(button) === '客户管理', '真实标签错误拼接了按钮文本')
   }))
 
+  testResults.push(run('读取按钮关联的简短 tooltip', function () {
+    fixtures.innerHTML = '<button aria-describedby="tip"><i id="icon"></i></button><span id="tip" role="tooltip">刷新列表</span>'
+    assert(getChineseLabelByElement(fixtures.querySelector('#icon')) === '刷新列表', '未读取关联 tooltip')
+  }))
+
+  testResults.push(run('过长 tooltip 不作为业务名称', function () {
+    fixtures.innerHTML = '<button aria-describedby="tip" title="打开设置"><i id="icon"></i></button><span id="tip" role="tooltip">这是一个非常长的提示文本，超过三十个字后不应作为业务名称</span>'
+    assert(getChineseLabelByElement(fixtures.querySelector('#icon')) === '打开设置', '过长 tooltip 未回退到 title')
+  }))
+
+  testResults.push(run('无 label 的单选框和勾选框使用默认名称', function () {
+    fixtures.innerHTML = '<input type="radio"><input type="checkbox">'
+    assert(getChineseLabelByElement(fixtures.querySelector('input[type="radio"]')) === '单选', '单选框默认名称错误')
+    assert(getChineseLabelByElement(fixtures.querySelector('input[type="checkbox"]')) === '勾选', '勾选框默认名称错误')
+  }))
+
+  testResults.push(run('组件包装器无 label 时使用默认名称', function () {
+    fixtures.innerHTML = '<label class="el-radio"><input type="radio"></label><label class="el-checkbox"><input type="checkbox"></label>'
+    assert(getChineseLabelByElement(fixtures.querySelector('.el-radio')) === '单选', '组件单选框默认名称错误')
+    assert(getChineseLabelByElement(fixtures.querySelector('.el-checkbox')) === '勾选', '组件勾选框默认名称错误')
+  }))
+
   fixtures.innerHTML = ''
   const passedCount = testResults.filter(Boolean).length
   const passed = passedCount === testResults.length

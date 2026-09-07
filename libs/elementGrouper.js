@@ -50,11 +50,29 @@ const ElementGrouper = (function () {
     return origin + pathname + (hashPath ? '#' + hashPath : '')
   }
 
+  /**
+   * 解析页面面包屑名称。
+   * 仅识别应用主面包屑，按层级拼接各项文本，避免分隔符或嵌套节点带来重复内容。
+   */
+  function getBreadcrumbName() {
+    try {
+      const breadcrumb = document.querySelector('.el-breadcrumb.app-breadcrumb')
+      if (!breadcrumb) return ''
+
+      const items = breadcrumb.querySelectorAll('.el-breadcrumb__inner')
+      const names = Array.prototype.map.call(items, item => cleanText(item.innerText || item.textContent))
+        .filter(Boolean)
+      return cleanText(names.join('-'))
+    } catch (e) {
+      return ''
+    }
+  }
+
   function getCurrentPageContext() {
     const routeIdentity = getRouteIdentity(window.location)
     return {
       type: 'page',
-      propertiesName: '主页面',
+      propertiesName: getBreadcrumbName() || '主页面',
       key: PAGE_GROUP_KEY + ':' + encodeURIComponent(routeIdentity),
       fixedKey: true,
       url: window.location.href,
@@ -275,6 +293,12 @@ const ElementGrouper = (function () {
     while (node && node !== document.body && node !== document.documentElement) {
       const type = matchContainerType(node)
       if (type) {
+        // 一个提示框常同时存在 wrapper、dialog、content 等嵌套节点，
+        // 它们代表同一个可操作区域，分组路径只保留最近的 dialog 容器。
+        if (type === 'dialog' && path.some(item => item.type === 'dialog')) {
+          node = node.parentElement
+          continue
+        }
         // 直接取缓存中的字段副本，避免外部修改污染缓存
         const info = getContainerInfo(node, type)
         path.unshift({ type: info.type, propertiesName: info.propertiesName, key: info.key })

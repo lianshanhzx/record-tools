@@ -125,8 +125,9 @@ function getRealLabelByElement(element) {
       () => getLabelByFor(element),
       () => getWrappingLabel(element, false),
       () => getAriaLabel(element),
-      () => getAttributeLabel(element),
-      () => getPlaceHolderLabel(element),
+       () => getAttributeLabel(element),
+       () => getTooltipLabel(element),
+       () => getPlaceHolderLabel(element),
       () => getDataAttributesLabel(element),
       () => getTextContentLabel(element)
     ]
@@ -140,6 +141,49 @@ function getRealLabelByElement(element) {
     console.error('获取真实标签时出错:', error)
     return null
   }
+}
+
+// 读取控件绑定的简短 tooltip。气泡通常通过 aria-describedby 或 data-* 属性关联。
+function getTooltipLabel(element) {
+  if (!element) return null
+  const toShortText = value => {
+    const text = (value || '').replace(/\s+/g, ' ').trim()
+    return text && text.length <= 30 ? text : null
+  }
+
+  let target = element
+  if (element.closest) {
+    target = element.closest('button, a, [role="button"], .el-button, .el-tooltip') || element
+  }
+  const describedBy = target.getAttribute && target.getAttribute('aria-describedby')
+  if (describedBy) {
+    const describedText = describedBy.split(/\s+/)
+      .map(id => document.getElementById(id))
+      .filter(Boolean)
+      .map(node => toShortText(node.textContent))
+      .find(Boolean)
+    if (describedText) return describedText
+  }
+  const tooltipAttrs = [
+    'data-tooltip', 'data-tooltip-content', 'data-tooltip-text',
+    'data-original-title', 'data-content', 'data-tip', 'tooltip'
+  ]
+  for (const attr of tooltipAttrs) {
+    const text = toShortText(target.getAttribute && target.getAttribute(attr))
+    if (text) return text
+  }
+  return target !== element ? toShortText(target.getAttribute && target.getAttribute('title')) : null
+}
+
+function getDefaultControlLabel(element) {
+  if (!element) return null
+  const type = (element.getAttribute && element.getAttribute('type') || '').toLowerCase()
+  const className = element.getAttribute && element.getAttribute('class') || ''
+  if (type === 'radio' || /\bel-radio(?:-group)?\b/.test(className) ||
+      (element.closest && element.closest('.el-radio, .el-radio-group'))) return '单选'
+  if (type === 'checkbox' || /\bel-checkbox(?:-group)?\b/.test(className) ||
+      (element.closest && element.closest('.el-checkbox, .el-checkbox-group'))) return '勾选'
+  return null
 }
 
 //找占位符中的label
@@ -187,7 +231,8 @@ function getDataAttributesLabel(element) {
   for (const attr of dataAttrs) {
     const value = element.getAttribute(attr);
     //避免提取大段文本
-    if (value && value.length >= 1 && value.length <= 50) {
+    const maxLength = attr === 'data-tip' ? 30 : 50
+    if (value && value.length >= 1 && value.length <= maxLength) {
       return value.trim();
     }
   }
@@ -234,13 +279,17 @@ function getChineseLabelByElement(element) {
       // ARIA标签
       () => getAriaLabel(element),
        // 标题属性
-      () => getAttributeLabel(element),
+       () => getAttributeLabel(element),
+       // 绑定的简短 tooltip（图标按钮通常没有可用文本）
+       () => getTooltipLabel(element),
       // 占位符文本（针对输入框）
       () => getPlaceHolderLabel(element),
       // 数据属性
       () => getDataAttributesLabel(element),
       // 按钮/链接的文本内容
-      () => getTextContentLabel(element)
+       () => getTextContentLabel(element),
+       // 没有 label 的原生或组件单选框/勾选框
+       () => getDefaultControlLabel(element)
     ];
     
     // 执行策略直到找到中文标签

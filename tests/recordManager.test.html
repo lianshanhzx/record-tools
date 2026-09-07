@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <title>RecordManager tests</title>
+  <style>
+    body { font-family: sans-serif; padding: 20px; }
+    .pass { color: #18794e; }
+    .fail { color: #b42318; }
+  </style>
+</head>
+<body>
+  <p id="summary">运行中...</p>
+  <ol id="results"></ol>
+  <input id="selectAllRecords" type="checkbox">
+  <span id="replaySelection"></span>
+  <span id="recordCount"></span>
+  <div id="listBody"></div>
+  <script src="../libs/jquery.js"></script>
+  <script src="../libs/utils.js"></script>
+  <script src="../libs/elementGrouper.js"></script>
+  <script>function escHtml(value) { return String(value || '').replace(/[&<>"']/g, ''); }</script>
+  <script src="../popup/recordManager.js"></script>
+  <script src="recordManager.test.js"></script>
+</body>
+</html>

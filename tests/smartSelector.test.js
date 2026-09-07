@@ -234,6 +234,60 @@
     assert(result.xpath.indexOf('客户B002') !== -1, 'XPath 未使用当前行文本');
   });
 
+  test('表格优先使用编号列并限定表格范围', function () {
+    mount(
+      '<table data-testid="customer-table"><thead><tr><th>客户编号</th><th>客户名称</th><th>操作</th></tr></thead>' +
+      '<tbody><tr><td>C001</td><td>客户甲</td><td><button>编辑</button></td></tr>' +
+      '<tr><td>C002</td><td>客户乙</td><td><button>编辑</button></td></tr></tbody></table>'
+    );
+    const target = fixtures.querySelectorAll('button')[1];
+    const result = assertSelector(target, 'table_scoped_row_number');
+    assert(result.xpath.indexOf("@data-testid='customer-table'") !== -1, '未限定到目标表格');
+    assert(result.xpath.indexOf("客户编号") === -1, '行定位不应把表头写入行谓词');
+    assert(result.xpath.indexOf("C002") !== -1, '未使用当前行编号');
+  });
+
+  test('表格没有编号时使用名称列', function () {
+    mount(
+      '<table><thead><tr><th>客户名称</th><th>状态</th><th>操作</th></tr></thead>' +
+      '<tbody><tr><td>客户甲</td><td>正常</td><td><button>查看</button></td></tr>' +
+      '<tr><td>客户乙</td><td>正常</td><td><button>查看</button></td></tr></tbody></table>'
+    );
+    const target = fixtures.querySelectorAll('button')[1];
+    const result = assertSelector(target, 'table_scoped_row_name');
+    assert(result.xpath.indexOf('客户乙') !== -1, '未使用当前行名称');
+  });
+
+  test('表格编号和名称不唯一时追加其他列', function () {
+    mount(
+      '<table><thead><tr><th>编号</th><th>名称</th><th>类型</th><th>操作</th></tr></thead>' +
+      '<tbody><tr><td>A01</td><td>合同</td><td>采购</td><td><button>编辑</button></td></tr>' +
+      '<tr><td>A01</td><td>合同</td><td>销售</td><td><button>编辑</button></td></tr></tbody></table>'
+    );
+    const target = fixtures.querySelectorAll('button')[1];
+    const result = assertSelector(target, 'table_scoped_row_composite');
+    assert(result.xpath.indexOf('A01') !== -1, '组合定位缺少编号');
+    assert(result.xpath.indexOf('合同') !== -1, '组合定位缺少名称');
+    assert(result.xpath.indexOf('销售') !== -1, '组合定位未追加其他列');
+  });
+
+  test('表格行顺序变化后仍按业务列定位', function () {
+    mount(
+      '<table><thead><tr><th>编号</th><th>名称</th><th>操作</th></tr></thead>' +
+      '<tbody><tr><td>A01</td><td>甲</td><td><button>编辑</button></td></tr>' +
+      '<tr><td>B02</td><td>乙</td><td><button>编辑</button></td></tr></tbody></table>'
+    );
+    const target = fixtures.querySelectorAll('button')[1];
+    const first = assertSelector(target, 'table_scoped_row_number');
+    const oldXpath = first.xpath;
+    fixtures.querySelector('tbody').innerHTML =
+      '<tr><td>B02</td><td>乙</td><td><button>编辑</button></td></tr>' +
+      '<tr><td>A01</td><td>甲</td><td><button>编辑</button></td></tr>';
+    const newTarget = fixtures.querySelectorAll('button')[0];
+    const matches = document.evaluate(oldXpath, document, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null);
+    assert(matches.snapshotLength === 1 && matches.snapshotItem(0) === newTarget, '行顺序变化后未命中业务行');
+  });
+
   test('业务 ID 中的长数字不会被直接误杀', function () {
     mount('<input id="customer123456" placeholder="名称">');
     const result = assertSelector(fixtures.querySelector('input'), 'stable_id');

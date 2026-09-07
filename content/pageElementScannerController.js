@@ -69,6 +69,7 @@ const PageElementScannerController = (function () {
   let observer = null
   let debounceTimer = null
   let deferredRegionScanTimer = null
+  let triggerScanTimer = null
   let lastScanTime = 0
   let routeCheckTimer = null
   let routeScanTimer = null
@@ -78,6 +79,8 @@ const PageElementScannerController = (function () {
   let currentPageContext = null
   const pageOrderMap = new Map()
   let nextPageOrder = 0
+  let nextElementContextId = 1
+  const elementContextIdMap = new WeakMap()
   // 在 debounce 窗口内累积所有 mutation 的根节点，避免只扫描最后一次 mutation 的 roots
   let pendingRoots = []
 
@@ -101,6 +104,7 @@ const PageElementScannerController = (function () {
 
   // 最近点击的按钮类元素（作为增量扫描的触发源候选）
   let lastTrigger = null
+  let nextTriggerId = 1
 
   // 页面点击监听器引用，stopObserver 时移除
   let clickListener = null
@@ -246,6 +250,7 @@ const PageElementScannerController = (function () {
     const dialog = element.closest(
       '.el-dialog__wrapper, .el-dialog, .el-drawer__wrapper, .el-drawer, ' +
       '.ant-modal-wrap, .ant-modal, .ivu-modal-wrap, .ivu-modal, ' +
+      '.el-message-box__wrapper, .el-message-box, ' +
       '.modal, .modal-dialog, .drawer, .dialog, [role="dialog"]'
     )
     if (!dialog) return true
@@ -283,8 +288,18 @@ const PageElementScannerController = (function () {
     return currentPageContext
   }
 
-  function makeContextKey(pageKey, target, anchorTarget) {
-    return (pageKey || '') + '\n@@target=' + (target || '') + '\n@@anchor=' + (anchorTarget || '')
+  function makeContextKey(pageKey, target, anchorTarget, anchorRecordKey) {
+    return (pageKey || '') + '\n@@target=' + (target || '') + '\n@@anchor=' + (anchorTarget || '') + '\n@@anchorRecord=' + (anchorRecordKey || '')
+  }
+
+  function getElementContextId(element) {
+    if (!element) return ''
+    let id = elementContextIdMap.get(element)
+    if (!id) {
+      id = 'element-' + nextElementContextId++
+      elementContextIdMap.set(element, id)
+    }
+    return id
   }
 
   /**
@@ -294,12 +309,25 @@ const PageElementScannerController = (function () {
    */
   function resolveAnchorContext(anchorElement) {
     if (!anchorElement) return null
+    const triggerContext = anchorElement.element ? anchorElement : null
+    const element = triggerContext ? triggerContext.element : anchorElement
 
-    const anchorInfo = findInternalInfoByElement(anchorElement)
+    if (triggerContext && triggerContext.target) {
+      return {
+        target: triggerContext.target,
+        propertiesName: triggerContext.propertiesName || '',
+        recordKey: triggerContext.recordKey || ''
+      }
+    }
+
+    const anchorInfo = findInternalInfoByElement(element)
     if (anchorInfo && anchorInfo.target) {
       return {
         target: anchorInfo.target,
-        propertiesName: anchorInfo.propertiesName || ''
+        propertiesName: anchorInfo.propertiesName || '',
+        recordKey: triggerContext
+          ? (triggerContext.recordKey || '')
+          : (lastTrigger && lastTrigger.element === element ? lastTrigger.recordKey : '')
       }
     }
 
@@ -307,18 +335,24 @@ const PageElementScannerController = (function () {
     let propertiesName = ''
     try {
       if (typeof SmartSelector !== 'undefined') {
-        target = new SmartSelector(anchorElement).getSelector() || ''
+        target = new SmartSelector(element).getSelector() || ''
       }
     } catch (e) {
       console.warn('[ScannerController] 生成锚点 XPath 失败', e)
     }
     try {
       if (target && typeof getChineseLabelByElement !== 'undefined') {
-        propertiesName = getChineseLabelByElement(anchorElement) || ''
+        propertiesName = getChineseLabelByElement(element) || ''
       }
     } catch (e) {}
 
-    return target ? { target: target, propertiesName: propertiesName } : null
+    return target ? {
+      target: target,
+      propertiesName: propertiesName,
+      recordKey: triggerContext
+        ? (triggerContext.recordKey || '')
+        : (lastTrigger && lastTrigger.element === element ? lastTrigger.recordKey : '')
+    } : null
   }
 
   /**
@@ -331,6 +365,7 @@ const PageElementScannerController = (function () {
     return root.closest(
       '.el-dialog__wrapper, .el-dialog, .el-drawer__wrapper, .el-drawer, ' +
       '.ant-modal-wrap, .ant-modal, .ivu-modal-wrap, .ivu-modal, ' +
+      '.el-message-box__wrapper, .el-message-box, ' +
       '.modal, .modal-dialog, .drawer, .dialog, [role="dialog"], ' +
       '.el-tab-pane, .ant-tabs-tabpane, .ivu-tabs-tabpane, .tab-pane, [role="tabpanel"], ' +
       '.el-collapse-item, .ant-collapse-item, .ivu-collapse-item, .collapse-panel, .collapse-item'
@@ -343,7 +378,9 @@ const PageElementScannerController = (function () {
    * 窗口内。此时用户可以先操作新弹窗中的元素，录制器需要该上下文避免产生无锚点记录。
    */
   function updatePendingScanAnchor(roots) {
-    if (!lastTrigger || !lastTrigger.active || !isAnchorDialogVisible(lastTrigger.element)) return
+    // 触发按钮所在的确认框可能在点击后立即关闭，但该点击仍然是新区域的有效锚点。
+    // 此时不能因为按钮已从 DOM 移除而丢失锚点，否则连续确认框会退回到主页面。
+    if (!lastTrigger || !lastTrigger.active) return
 
     const context = resolveAnchorContext(lastTrigger.element)
     if (!context) return
@@ -353,6 +390,7 @@ const PageElementScannerController = (function () {
         element: lastTrigger.element,
         target: context.target,
         propertiesName: context.propertiesName,
+        recordKey: context.recordKey || lastTrigger.recordKey,
         roots: []
       }
     }
@@ -394,7 +432,7 @@ const PageElementScannerController = (function () {
    * 取消等关闭弹窗按钮不会把关闭后的主页面变化错误绑定到自身。
    */
   function getPendingScanAnchorByElement(element) {
-    if (!pendingScanAnchor || !element || !isAnchorDialogVisible(pendingScanAnchor.element)) return null
+    if (!pendingScanAnchor || !element) return null
 
     const isInsidePendingRoot = pendingScanAnchor.roots.some(root => {
       if (!root || !root.isConnected || typeof root.contains !== 'function') return false
@@ -406,7 +444,29 @@ const PageElementScannerController = (function () {
 
     return {
       target: pendingScanAnchor.target,
-      propertiesName: pendingScanAnchor.propertiesName
+      propertiesName: pendingScanAnchor.propertiesName,
+      recordKey: pendingScanAnchor.recordKey || ''
+    }
+  }
+
+  function setTriggerRecordKey(element, recordKey) {
+    if (!lastTrigger || lastTrigger.element !== element || !recordKey) return
+    lastTrigger.actionPropertiesID = recordKey
+    if (pendingScanAnchor && pendingScanAnchor.element === element) {
+      pendingScanAnchor.actionPropertiesID = recordKey
+    }
+    debugLog('trigger-record-key-assigned', {
+      target: resolveAnchorContext(element)?.target || '',
+      anchorRecordKey: lastTrigger.recordKey,
+      actionPropertiesID: recordKey
+    })
+  }
+
+  function getTriggerContextByElement(element) {
+    if (!lastTrigger || !element || lastTrigger.element !== element) return null
+    return {
+      recordKey: lastTrigger.recordKey,
+      actionPropertiesID: lastTrigger.actionPropertiesID || ''
     }
   }
 
@@ -422,6 +482,7 @@ const PageElementScannerController = (function () {
     delete clone._anchorElement
     if (info._anchorTarget) {
       clone.anchorTarget = info._anchorTarget
+      clone.anchorRecordKey = info._anchorRecordKey || ''
       const anchorKey = (info.pageKey || '') + '\n' + info._anchorTarget
       const anchorName = anchorNameByTarget && anchorNameByTarget.get(anchorKey)
         ? anchorNameByTarget.get(anchorKey)
@@ -560,7 +621,13 @@ const PageElementScannerController = (function () {
       if (info.pageKey !== pageKey) continue
       if (targetEl === element || (typeof targetEl.contains === 'function' && targetEl.contains(element))) {
         const activeAnchor = activeAnchorByElement.get(targetEl)
-        if (activeAnchor && info._anchorTarget === activeAnchor.target) return info
+        if (activeAnchor) {
+          // 同一弹窗 DOM 的多个点击实例可能共用相同的 anchorTarget，必须继续校验
+          // anchorRecordKey，否则遍历时会把后一次操作反查为第一次弹窗快照。
+          if (info._anchorTarget === activeAnchor.target &&
+              (info._anchorRecordKey || '') === (activeAnchor.recordKey || '')) return info
+          continue
+        }
         if (!matched || (info._contextUpdatedAt || 0) >= (matched._contextUpdatedAt || 0)) {
           matched = info
         }
@@ -575,7 +642,7 @@ const PageElementScannerController = (function () {
         if (target) {
           const activeAnchor = activeAnchorByElement.get(element)
           if (activeAnchor) {
-            const activeInfo = scannedElementMap.get(makeContextKey(pageKey, target, activeAnchor.target))
+            const activeInfo = scannedElementMap.get(makeContextKey(pageKey, target, activeAnchor.target, activeAnchor.recordKey))
             if (activeInfo) return activeInfo
           }
           for (const [contextKey, info] of scannedElementMap) {
@@ -718,7 +785,7 @@ const PageElementScannerController = (function () {
         info.routeIdentity = page.routeIdentity
         info.pageOrder = pageOrderMap.get(page.key)
         info._contextUpdatedAt = Date.now()
-        scannedElementMap.set(makeContextKey(info.pageKey, info.target, ''), info)
+          scannedElementMap.set(makeContextKey(info.pageKey, info.target, '', getElementContextId(info._targetElement)), info)
       })
 
       const count = notifyPopup(page.key)
@@ -753,20 +820,25 @@ const PageElementScannerController = (function () {
         const activeAnchor = activeAnchorByElement.get(info._targetElement)
         if (activeAnchor) info._anchorTarget = activeAnchor.target
         if (activeAnchor) info._anchorPropertiesName = activeAnchor.name
+        if (activeAnchor) info._anchorRecordKey = activeAnchor.recordKey || ''
       }
 
-      const contextKey = makeContextKey(info.pageKey, info.target, info._anchorTarget)
+      const contextKey = info._anchorTarget
+        ? makeContextKey(info.pageKey, info.target, info._anchorTarget, info._anchorRecordKey)
+        : makeContextKey(info.pageKey, info.target, '', getElementContextId(info._targetElement))
       const oldInfo = scannedElementMap.get(contextKey)
       if (oldInfo && oldInfo.propertiesID) info.propertiesID = oldInfo.propertiesID
       if (oldInfo && oldInfo._anchorTarget && !info._anchorTarget) {
         info._anchorTarget = oldInfo._anchorTarget
         info._anchorPropertiesName = oldInfo._anchorPropertiesName
+        info._anchorRecordKey = oldInfo._anchorRecordKey || ''
       }
       info._contextUpdatedAt = Date.now()
       if (info._anchorTarget && info._targetElement) {
         activeAnchorByElement.set(info._targetElement, {
           target: info._anchorTarget,
-          name: info._anchorPropertiesName || ''
+          name: info._anchorPropertiesName || '',
+          recordKey: info._anchorRecordKey || ''
         })
       }
       scannedElementMap.set(contextKey, info)
@@ -812,11 +884,13 @@ const PageElementScannerController = (function () {
       // 解析锚点信息
       let anchorTarget = null
       let anchorPropertiesName = null
+      let anchorRecordKey = ''
       if (anchorElement) {
         const anchorContext = resolveAnchorContext(anchorElement)
         if (anchorContext) {
           anchorTarget = anchorContext.target
           anchorPropertiesName = anchorContext.propertiesName
+          anchorRecordKey = anchorContext.recordKey || ''
         }
       }
 
@@ -828,11 +902,14 @@ const PageElementScannerController = (function () {
         if (allResults.length > 0) await new Promise(resolve => setTimeout(resolve, 0))
         const results = scanRoot(root)
         results.forEach(info => {
-          if (anchorTarget && rootContext.anchorEligible && info.target !== anchorTarget && !info._anchorTarget) {
+          // 当前轮次的显式触发上下文优先于 DOM 元素上一次扫描留下的 active anchor。
+          // 同一个弹窗组件被“新增一级分类”和“新增分类”复用时，必须生成两个独立实例。
+          if (anchorTarget && info.target !== anchorTarget) {
             const targetElement = info._targetElement
             if (targetElement && (targetElement === root || root.contains(targetElement))) {
               info._anchorTarget = anchorTarget
               info._anchorPropertiesName = anchorPropertiesName || ''
+              info._anchorRecordKey = anchorRecordKey
             }
           }
           allResults.push(info)
@@ -854,7 +931,14 @@ const PageElementScannerController = (function () {
         rootCount: visibleRoots.length,
         resultCount: allResults.length,
         count: count,
-        anchored: !!anchorElement
+        anchored: !!anchorElement,
+        anchorTarget: anchorTarget || '',
+        anchorRecordKey: anchorRecordKey || '',
+        targets: allResults.slice(0, 20).map(info => ({
+          target: info.target || '',
+          anchorTarget: info._anchorTarget || '',
+          anchorRecordKey: info._anchorRecordKey || ''
+        }))
       })
       notifyScanStatus('completed', count)
       pendingScanAnchor = null
@@ -983,7 +1067,7 @@ const PageElementScannerController = (function () {
             const newlyVisible = updateSignificantRootState(root)
             // 仅在显著区域实际由隐藏变为可见时扫描。普通保存导致的节点更新
             // 不应把整块既有区域重新归到最近点击的保存按钮下。
-            if (!suppressPassiveChange && newlyVisible) {
+            if (!suppressPassiveChange && (newlyVisible || (allowActiveAncestor && isDialogRoot(root)))) {
               addRoot(root, true)
             }
           }
@@ -997,7 +1081,7 @@ const PageElementScannerController = (function () {
         const candidates = findSignificantRoots(target, allowActiveAncestor)
         for (const root of candidates) {
           const newlyVisible = updateSignificantRootState(root)
-          if (!suppressPassiveChange && newlyVisible) addRoot(root, true)
+           if (!suppressPassiveChange && (newlyVisible || (allowActiveAncestor && isDialogRoot(root)))) addRoot(root, true)
         }
         if (!suppressPassiveChange && candidates.size === 0 && containsScannableElement(target) && !isInPopupPanel(target)) {
           addRoot(resolvePendingScanRoot(target), false)
@@ -1018,7 +1102,7 @@ const PageElementScannerController = (function () {
       '.el-drawer', '.el-drawer__wrapper',
       '.ant-modal', '.ant-modal-wrap', '.ant-modal-content',
       '.ivu-modal', '.ivu-modal-wrap',
-      // '.el-message-box', '.el-message-box__wrapper',//提示信息的出现不扫描
+      '.el-message-box', '.el-message-box__wrapper',
       '.modal', '.modal-dialog', '.modal-content',
       '.drawer', '.drawer-content',
       '.dialog', '.dialog-content',
@@ -1076,6 +1160,68 @@ const PageElementScannerController = (function () {
     const isVisible = isVisibleElement(root)
     significantRootState.set(root, isVisible)
     return isVisible && (!wasKnown || !wasVisible)
+  }
+
+  function isDialogRoot(root) {
+    if (!root || typeof root.matches !== 'function') return false
+    try {
+      return root.matches(
+        '.el-dialog, .el-dialog__wrapper, .el-message-box, .el-message-box__wrapper, ' +
+        '.ant-modal, .ant-modal-wrap, .ivu-modal, .ivu-modal-wrap, ' +
+        '.modal, .modal-dialog, .drawer, .dialog, [role="dialog"]'
+      )
+    } catch (e) {
+      return false
+    }
+  }
+
+  function getTopVisibleDialog() {
+    const selector = [
+      '.el-dialog__wrapper', '.el-dialog', '.el-message-box__wrapper', '.el-message-box',
+      '.ant-modal-wrap', '.ant-modal', '.ivu-modal-wrap', '.ivu-modal',
+      '.modal', '.modal-dialog', '.drawer', '.dialog', '[role="dialog"]'
+    ].join(',')
+    let result = null
+    let bestZIndex = -Infinity
+    try {
+      document.querySelectorAll(selector).forEach((element, index) => {
+        if (!isVisibleElement(element)) return
+        let zIndex = 0
+        let node = element
+        while (node && node !== document.documentElement) {
+          const value = Number.parseInt(window.getComputedStyle(node).zIndex, 10)
+          if (Number.isFinite(value)) zIndex = Math.max(zIndex, value)
+          node = node.parentElement
+        }
+        if (!result || zIndex > bestZIndex || (zIndex === bestZIndex && index > result.index)) {
+          result = { element: element, index: index }
+          bestZIndex = zIndex
+        }
+      })
+    } catch (e) {}
+    return result ? result.element : null
+  }
+
+  function scheduleTriggerScan(trigger) {
+    clearTimeout(triggerScanTimer)
+    if (!trigger) return
+    const triggerId = trigger.recordKey
+    triggerScanTimer = setTimeout(() => {
+      triggerScanTimer = null
+      if (!popupOpen || !lastTrigger || lastTrigger.recordKey !== triggerId) return
+      const dialog = getTopVisibleDialog()
+      if (!dialog) return
+      debugLog('trigger-dialog-scan', {
+        target: trigger.target || '',
+        anchorRecordKey: trigger.recordKey || '',
+        dialogClass: dialog.getAttribute('class') || ''
+      })
+      scanRegions([{ element: dialog, anchorEligible: true }], Object.assign({}, trigger, {
+        // 使用点击时冻结的 target，避免弹窗复用后重新计算出错误的按钮 XPath。
+        target: trigger.target || '',
+        propertiesName: trigger.propertiesName || ''
+      }))
+    }, 120)
   }
 
   function rememberSignificantRootStates() {
@@ -1147,17 +1293,14 @@ const PageElementScannerController = (function () {
 
     updatePendingScanAnchor(roots.filter(context => context.anchorEligible).map(context => context.element))
 
-    clearTimeout(debounceTimer)
-    debounceTimer = setTimeout(() => {
-      const uniqueRoots = normalizeRootContexts(pendingRoots)
-      pendingRoots = []
-      let trigger = getRecentTrigger()
-      if (trigger && !isAnchorDialogVisible(trigger)) {
-        trigger = null
-      }
-      scanRegions(uniqueRoots, trigger)
-      lastTrigger = null
-    }, config.debounceMs)
+      clearTimeout(debounceTimer)
+      debounceTimer = setTimeout(() => {
+        const uniqueRoots = normalizeRootContexts(pendingRoots)
+        pendingRoots = []
+       let trigger = getRecentTrigger()
+       scanRegions(uniqueRoots, trigger)
+        lastTrigger = null
+      }, config.debounceMs)
   }
 
   /**
@@ -1169,7 +1312,8 @@ const PageElementScannerController = (function () {
   function getRecentTrigger() {
     if (!lastTrigger) return null
     if (!lastTrigger.active) return null
-    return lastTrigger.element
+    // 返回快照而不是只返回 DOM 元素，避免 debounce/minInterval 延迟期间丢失点击实例 key。
+    return Object.assign({}, lastTrigger)
   }
 
   /**
@@ -1193,7 +1337,20 @@ const PageElementScannerController = (function () {
     }
     triggerEl = triggerEl || uiControl
     if (triggerEl) {
-      lastTrigger = { element: triggerEl, time: Date.now(), active: false }
+      const targetContext = resolveAnchorContext(triggerEl)
+      lastTrigger = {
+        element: triggerEl,
+        time: Date.now(),
+        active: false,
+        recordKey: 'click-' + nextTriggerId++,
+        target: targetContext ? targetContext.target : '',
+        propertiesName: targetContext ? targetContext.propertiesName : ''
+      }
+      debugLog('trigger-click', {
+        target: lastTrigger.target,
+        anchorRecordKey: lastTrigger.recordKey
+      })
+      scheduleTriggerScan(lastTrigger)
     }
   }
 
@@ -1225,6 +1382,8 @@ const PageElementScannerController = (function () {
     debounceTimer = null
     clearTimeout(deferredRegionScanTimer)
     deferredRegionScanTimer = null
+    clearTimeout(triggerScanTimer)
+    triggerScanTimer = null
     stopRouteObserver()
     pendingRoots = []
     pendingScanAnchor = null
@@ -1245,6 +1404,8 @@ const PageElementScannerController = (function () {
   }
 
   function clearData() {
+    clearTimeout(triggerScanTimer)
+    triggerScanTimer = null
     scannedElementMap.clear()
     activeAnchorByElement = new WeakMap()
     pendingScanAnchor = null
@@ -1353,7 +1514,9 @@ const PageElementScannerController = (function () {
     resume: resume,
     getCurrentPageContext: getCurrentPageContext,
     findScannedInfoByElement: findScannedInfoByElement,
-    getPendingScanAnchorByElement: getPendingScanAnchorByElement
+    getPendingScanAnchorByElement: getPendingScanAnchorByElement,
+    setTriggerRecordKey: setTriggerRecordKey,
+    getTriggerContextByElement: getTriggerContextByElement
   }
 })()
 

@@ -56,6 +56,8 @@ const RecordManager = {
   manualOrderEnabled: false,
   nextRecordKey: 1,
   deletedScanKeys: new Set(),
+  selectedRecordKeys: new Set(),
+  replayStateMap: new Map(),
 
   /** 为 DOM 操作分配稳定 key，避免依赖可能重复的 id/timestamp。 */
   ensureRecordKey(item) {
@@ -65,7 +67,14 @@ const RecordManager = {
 
   getScanKey(item) {
     if (!item || !item.target) return ''
-    return (item.pageKey || '') + '\n' + (item.target || '') + '\n' + (item.anchorTarget || '')
+    return (item.pageKey || '') + '\n' + (item.target || '') + '\n' + (item.anchorTarget || '') + '\n' + (item.anchorRecordKey || '')
+  },
+
+  debugLog(event, data) {
+    try {
+      if (window.localStorage.getItem('__record_tools_debug__') !== '1') return
+      console.info('[RecordTools][RecordManager]', event, data || {})
+    } catch (e) {}
   },
 
   /** 将自动填表动作中的下拉选项同步到对应的扫描元素，保证两种导出都能使用。 */
@@ -100,6 +109,7 @@ const RecordManager = {
       const index = this.scannedElementList.findIndex(item =>
         item.target === incoming.target &&
         (item.anchorTarget || '') === (incoming.anchorTarget || '') &&
+        (item.anchorRecordKey || '') === (incoming.anchorRecordKey || '') &&
         (item.pageKey || '') === (incoming.pageKey || '')
       )
       if (index >= 0) {
@@ -165,6 +175,12 @@ const RecordManager = {
       const indent = 16 + depth * 14
       const recordKey = self.ensureRecordKey(item)
       const isCut = self.cutRecordKey === recordKey
+      const replayState = self.replayStateMap.get(recordKey) || {}
+      const emptyValue = self.isFormRecord(item) && !self.hasReplayValue(item)
+      if (emptyValue) self.selectedRecordKeys.delete(recordKey)
+       const replayClass = emptyValue ? ' replay-empty-value' : (replayState.status ? ' replay-' + replayState.status : '')
+        const replayLabels = { running: '执行中', success: '校验成功', failed: '失败', skipped: '已跳过', cancelled: '已取消' }
+        const replayLabel = replayLabels[replayState.status]
 
       // 人工录制标记
       const manualBadge = item.manualRecord ? '<span class="manual-badge">人工</span>' : ''
@@ -182,10 +198,12 @@ const RecordManager = {
         valTitle = (item.objectValue || '') + '\n选项：' + item.options.join(' / ')
       }
 
-      html += '<div class="list-row' + (isCut ? ' cut-pending' : '') + '" style="padding-left:' + indent + 'px" data-record-key="' + escHtml(recordKey) + '">'
+      html += '<div class="list-row' + (isCut ? ' cut-pending' : '') + replayClass + '" style="padding-left:' + indent + 'px" data-record-key="' + escHtml(recordKey) + '">'
+      html += '<span class="col-select"><input type="checkbox" class="record-select" data-record-key="' + escHtml(recordKey) + '"' + (self.selectedRecordKeys.has(recordKey) ? ' checked' : '') + (emptyValue || (typeof ReplayService !== 'undefined' && ReplayService.running) ? ' disabled' : '') + ' title="选择此记录"></span>'
       html += '<span class="col-seq">' + idx + '</span>'
       html += '<span class="col-cmd">' + escHtml(item.eventTypeName || '') + '</span>'
-      html += '<span class="col-name" title="' + escHtml(name || '') + '">' + manualBadge + escHtml(name || '') + anchorBadge + '</span>'
+        const replayTitle = replayState.error || (replayState.expectedValue !== undefined ? '期望: ' + replayState.expectedValue + '，实际: ' + replayState.actualValue : '')
+        html += '<span class="col-name" title="' + escHtml(name || '') + '">' + manualBadge + escHtml(name || '') + anchorBadge + (replayLabel ? '<span class="replay-state ' + escHtml(replayState.status) + '" title="' + escHtml(replayTitle) + '">' + escHtml(replayLabel) + '</span>' : '') + '</span>'
       html += '<span class="col-target" title="' + escHtml(item.target || '') + '">'
       html += '<span class="col-target-text">' + escHtml(item.target || '') + '</span>'
       html += '<button type="button" class="copy-target-btn" title="复制 Target">复制</button>'
@@ -240,8 +258,17 @@ const RecordManager = {
       }
 
       // 反查锚点记录（需与 content 侧 contextKey 使用相同拼接规则：pageKey\n+target）。
-      const anchor = anchorByTarget.get((item.pageKey || '') + '\n' + item.anchorTarget)
-      if (!anchor) return ownPath.length > 0 ? ownPath : [pageGroup]
+      const anchorKey = (item.pageKey || '') + '\n' + item.anchorTarget + '\n' + (item.anchorRecordKey || '')
+      const anchor = anchorByTarget.get(anchorKey) ||
+        (!item.anchorRecordKey ? anchorByTarget.get((item.pageKey || '') + '\n' + item.anchorTarget + '\n') : null)
+      if (!anchor) {
+        self.debugLog('anchor-not-found', {
+          target: item.target || '',
+          anchorTarget: item.anchorTarget || '',
+          anchorRecordKey: item.anchorRecordKey || ''
+        })
+        return ownPath.length > 0 ? ownPath : [pageGroup]
+      }
 
       const anchorPath = normalizePath(anchor)
       let commonLength = 0
@@ -257,7 +284,7 @@ const RecordManager = {
         // 同一弹窗组件可被多个按钮复用；首个相对分组加入锚点上下文，
         // 使 A/B 按钮各自拥有独立子分组，同时保持显示名称不变。
         return Object.assign({}, g, {
-          key: (g.key || g.propertiesName) + '@@anchor=' + item.anchorTarget
+          key: (g.key || g.propertiesName) + '@@anchor=' + item.anchorTarget + '@@record=' + (item.anchorRecordKey || '')
         })
       })
       if (relativePath.length === 0) return ownPath.length > 0 ? ownPath : [pageGroup]
@@ -273,6 +300,8 @@ const RecordManager = {
       const roots = []
       const nodeMap = new Map()
       const anchorByTarget = new Map()
+      const leafNodeByItem = new Map()
+      const anchoredGroups = []
 
       // 先建立 target -> 记录 的索引，供 displayPath 反查锚点记录。
       ;(items || []).forEach(item => {
@@ -280,6 +309,25 @@ const RecordManager = {
         const key = (item.pageKey || '') + '\n' + item.target
         const existing = anchorByTarget.get(key)
         if (!existing || (existing.anchorTarget && !item.anchorTarget)) anchorByTarget.set(key, item)
+        if (!item.anchorTarget) {
+          anchorByTarget.set(key + '\n', item)
+          // 人工按钮动作使用 propertiesID 作为点击实例身份，供后续弹窗反查。
+            if (item.manualRecord && item.propertiesID) {
+              anchorByTarget.set(key + '\n' + item.propertiesID, item)
+            }
+            if (item.manualRecord && item.triggerRecordKey) {
+              anchorByTarget.set(key + '\n' + item.triggerRecordKey, item)
+            }
+        }
+        else anchorByTarget.set(key + '\n' + (item.anchorRecordKey || ''), item)
+        if (item.anchorTarget) {
+          self.debugLog('anchored-item-indexed', {
+            target: item.target || '',
+            anchorTarget: item.anchorTarget || '',
+            anchorRecordKey: item.anchorRecordKey || '',
+            propertiesID: item.propertiesID || ''
+          })
+        }
       })
 
       /**
@@ -290,6 +338,7 @@ const RecordManager = {
         let parent = null
         let parentKey = ''
         let node = null
+        const nodes = []
 
         path.forEach(g => {
           const part = (g.type || 'group') + ':' + (g.key || g.propertiesName)
@@ -315,14 +364,62 @@ const RecordManager = {
           node.count++
           parent = node
           parentKey = nodeKey
+          nodes.push(node)
         })
 
-        return node
+        return { leaf: node, nodes: nodes }
       }
 
       ;(items || []).forEach(item => {
-        const node = ensurePath(displayPath(item, anchorByTarget))
-        if (node) node.entries.push({ kind: 'item', item: item })
+        const path = displayPath(item, anchorByTarget)
+        const pathResult = ensurePath(path)
+        if (!pathResult.leaf) return
+        pathResult.leaf.entries.push({ kind: 'item', item: item })
+        leafNodeByItem.set(item, pathResult.leaf)
+
+        // 弹窗元素的扫描结果可能因异步消息顺序先于触发按钮到达。
+        // 记录其首个相对分组，待整棵树创建完成后再定位到锚点记录之后。
+        if (item.anchorTarget) {
+          const anchorKey = (item.pageKey || '') + '\n' + item.anchorTarget + '\n' + (item.anchorRecordKey || '')
+          const anchor = anchorByTarget.get(anchorKey) ||
+            (!item.anchorRecordKey ? anchorByTarget.get((item.pageKey || '') + '\n' + item.anchorTarget + '\n') : null)
+          const anchorPath = anchor ? normalizePath(anchor) : []
+          const relativeNode = pathResult.nodes[anchorPath.length]
+          if (relativeNode) anchoredGroups.push({ item: item, node: relativeNode })
+        }
+      })
+
+      const movedGroups = new Set()
+      anchoredGroups.forEach(({ item, node }) => {
+        const anchorKey = (item.pageKey || '') + '\n' + item.anchorTarget + '\n' + (item.anchorRecordKey || '')
+        const anchor = anchorByTarget.get(anchorKey) ||
+          (!item.anchorRecordKey ? anchorByTarget.get((item.pageKey || '') + '\n' + item.anchorTarget + '\n') : null)
+        const anchorParent = anchor && leafNodeByItem.get(anchor)
+        if (!anchorParent) return
+
+        // 没有新增分组的锚点记录（例如确认框按钮）也必须按触发关系排序，
+        // 不能让扫描消息的到达顺序决定它出现在触发按钮之前还是之后。
+        const itemParent = leafNodeByItem.get(item)
+        if (itemParent === anchorParent) {
+          const itemEntryIndex = anchorParent.entries.findIndex(entry => entry.kind === 'item' && entry.item === item)
+          const anchorEntryIndex = anchorParent.entries.findIndex(entry => entry.kind === 'item' && entry.item === anchor)
+          if (itemEntryIndex >= 0 && anchorEntryIndex >= 0 && itemEntryIndex !== anchorEntryIndex) {
+            const itemEntry = anchorParent.entries.splice(itemEntryIndex, 1)[0]
+            const adjustedAnchorIndex = itemEntryIndex < anchorEntryIndex ? anchorEntryIndex - 1 : anchorEntryIndex
+            anchorParent.entries.splice(adjustedAnchorIndex + 1, 0, itemEntry)
+          }
+          return
+        }
+
+        if (movedGroups.has(node)) return
+        const groupEntryIndex = anchorParent.entries.findIndex(entry => entry.kind === 'group' && entry.node === node)
+        const anchorEntryIndex = anchorParent.entries.findIndex(entry => entry.kind === 'item' && entry.item === anchor)
+        if (groupEntryIndex < 0 || anchorEntryIndex < 0) return
+
+        const groupEntry = anchorParent.entries.splice(groupEntryIndex, 1)[0]
+        const adjustedAnchorIndex = groupEntryIndex < anchorEntryIndex ? anchorEntryIndex - 1 : anchorEntryIndex
+        anchorParent.entries.splice(adjustedAnchorIndex + 1, 0, groupEntry)
+        movedGroups.add(node)
       })
 
       return roots
@@ -346,8 +443,13 @@ const RecordManager = {
         : ''
       const screenshotText = self.screenshotCaptureGroupKey === node.key ? self.screenshotCaptureText : '截图'
       const groupTitle = node.type === 'page' && node.url ? node.propertiesName + ' - ' + node.url : node.propertiesName
+      const groupRecords = self.getGroupReplayRecords(node)
+      const selectedGroupCount = groupRecords.filter(item => self.selectedRecordKeys.has(self.ensureRecordKey(item))).length
+      const groupChecked = groupRecords.length > 0 && selectedGroupCount === groupRecords.length ? ' checked' : ''
+      const groupDisabled = groupRecords.length === 0 || (typeof ReplayService !== 'undefined' && ReplayService.running) ? ' disabled' : ''
       html += '<div class="list-group-header group-type-' + escHtml(node.type) + '" data-group-key="' + escHtml(node.key) + '" style="padding-left:' + indent + 'px">'
       html += '<span class="group-arrow">' + (collapsed ? '▸' : '▾') + '</span>'
+      html += '<input type="checkbox" class="group-select" data-group-key="' + escHtml(node.key) + '"' + groupChecked + groupDisabled + ' title="选择当前分组记录">'
       html += '<span class="group-type-badge">' + escHtml(typeLabel) + '</span>'
       html += '<span class="group-name" title="' + escHtml(groupTitle) + '">' + escHtml(node.propertiesName) + '</span>'
       html += '<span class="group-count">' + node.count + ' 条</span>'
@@ -376,10 +478,16 @@ const RecordManager = {
       self.displayRoots = []
       self.displayGroupMap = new Map()
       document.getElementById('listBody').innerHTML = ''
+      self.updateSelectionUi()
       return
     }
 
     const roots = buildDisplayTree(data)
+    self.debugLog('display-tree-built', {
+      itemCount: data.length,
+      rootCount: roots.length,
+      rootNames: roots.map(root => root.propertiesName)
+    })
     self.displayRoots = roots
     self.displayGroupMap = new Map()
     // 递归建立 group key -> 节点索引，供 getGroupNode / 截图 / 删除等按键反查分组。
@@ -396,6 +504,7 @@ const RecordManager = {
     })
 
     document.getElementById('listBody').innerHTML = html
+    self.updateSelectionUi()
   },
 
   /**
@@ -418,6 +527,27 @@ const RecordManager = {
    */
   isButtonRecord(item) {
     return item.kind === 'button' || item.eventTypeValue === 'click'
+  },
+
+  isFormRecord(item) {
+    if (!item) return false
+    const tagName = String(item.tagName || '').toLowerCase()
+    const kind = String(item.kind || '').toLowerCase()
+    const action = Utils.normalizeEventType(item.eventTypeValue)
+    return ['input', 'textarea', 'select'].includes(tagName) ||
+      ['input', 'textarea', 'select', 'radio', 'checkbox', 'date'].includes(kind) ||
+      ['input', 'select:click', 'select:tree', 'radio', 'date'].includes(action)
+  },
+
+  hasReplayValue(item) {
+    if (item && item.hasRecordedValue === true) return true
+    if (!item || item.objectValue === null || typeof item.objectValue === 'undefined') return false
+    if (typeof item.objectValue === 'number' || typeof item.objectValue === 'boolean') return true
+    return String(item.objectValue).trim().length > 0
+  },
+
+  isReplayableRecord(item) {
+    return !!(item && item.target && (!this.isFormRecord(item) || this.hasReplayValue(item)))
   },
 
   /**
@@ -480,6 +610,99 @@ const RecordManager = {
     return this.recordActionList.find(item => this.ensureRecordKey(item) === recordKey) || null
   },
 
+  findScannedContextRecordIndex(target, anchorTarget, anchorRecordKey, pageKey) {
+    if (!target) return -1
+    return this.recordActionList.findIndex(item => item.target === target &&
+      (item.anchorTarget || '') === (anchorTarget || '') &&
+      (item.anchorRecordKey || '') === (anchorRecordKey || '') &&
+      (item.pageKey || '') === (pageKey || ''))
+  },
+
+  updateSelectionUi() {
+    const visibleKeys = (this.recordInfoLit || []).filter(item => this.isReplayableRecord(item)).map(item => this.ensureRecordKey(item))
+    const selectedVisible = visibleKeys.filter(key => this.selectedRecordKeys.has(key))
+    const selectAll = document.getElementById('selectAllRecords')
+    if (selectAll) {
+      selectAll.disabled = visibleKeys.length === 0 || (typeof ReplayService !== 'undefined' && ReplayService.running)
+      selectAll.checked = visibleKeys.length > 0 && selectedVisible.length === visibleKeys.length
+      selectAll.indeterminate = selectedVisible.length > 0 && selectedVisible.length < visibleKeys.length
+    }
+    const summary = document.getElementById('replaySelection')
+    if (summary) summary.textContent = '已选择 ' + selectedVisible.length + ' 条'
+    this.updateGroupSelectionUi()
+  },
+
+  getGroupReplayRecords(node) {
+    const records = []
+    const collect = current => {
+      ;(current && current.entries || []).forEach(entry => {
+        if (entry.kind === 'item' && this.isReplayableRecord(entry.item)) records.push(entry.item)
+        else collect(entry.node)
+      })
+    }
+    collect(node)
+    return records
+  },
+
+  updateGroupSelectionUi() {
+    document.querySelectorAll('.group-select').forEach(input => {
+      const node = this.getGroupNode(input.getAttribute('data-group-key'))
+      const records = this.getGroupReplayRecords(node)
+      const selected = records.filter(item => this.selectedRecordKeys.has(this.ensureRecordKey(item))).length
+      input.checked = records.length > 0 && selected === records.length
+      input.indeterminate = selected > 0 && selected < records.length
+    })
+  },
+
+  selectGroupRecords(groupKey, selected) {
+    const node = this.getGroupNode(groupKey)
+    this.getGroupReplayRecords(node).forEach(item => {
+      const key = this.ensureRecordKey(item)
+      if (selected) this.selectedRecordKeys.add(key)
+      else this.selectedRecordKeys.delete(key)
+    })
+    this.renderRecordList(this.recordInfoLit)
+    this.updateSelectionUi()
+  },
+
+  toggleRecordSelection(recordKey, selected) {
+    if (selected) this.selectedRecordKeys.add(recordKey)
+    else this.selectedRecordKeys.delete(recordKey)
+    this.updateSelectionUi()
+  },
+
+  selectAllVisibleRecords(selected) {
+    ;(this.recordInfoLit || []).filter(item => this.isReplayableRecord(item)).forEach(item => {
+      const key = this.ensureRecordKey(item)
+      if (selected) this.selectedRecordKeys.add(key)
+      else this.selectedRecordKeys.delete(key)
+    })
+    this.renderRecordList(this.recordInfoLit)
+    this.updateSelectionUi()
+  },
+
+  getReplayRecords() {
+    const visible = this.recordInfoLit || []
+    const replayable = visible.filter(item => this.isReplayableRecord(item))
+    const selected = replayable.filter(item => this.selectedRecordKeys.has(this.ensureRecordKey(item)))
+    return selected.length > 0 ? selected : replayable
+  },
+
+  getEmptyValueRecords(records) {
+    return (records || []).filter(item => this.isFormRecord(item) && !this.hasReplayValue(item))
+  },
+
+  resetReplayStates(records) {
+    this.replayStateMap.clear()
+    ;(records || []).forEach(item => this.replayStateMap.set(this.ensureRecordKey(item), { status: 'pending' }))
+    this.renderRecordList(this.recordInfoLit)
+  },
+
+   setReplayState(recordKey, status, error, details) {
+     this.replayStateMap.set(recordKey, Object.assign({ status, error: error || '' }, details || {}))
+    this.renderRecordList(this.recordInfoLit)
+  },
+
   clearCurrentRecord() {
     this.currentRecordInfo = {}
     $('#editCmd').val('')
@@ -498,6 +721,8 @@ const RecordManager = {
     }
     if (this.currentRecordInfo === record) this.clearCurrentRecord()
     if (this.cutRecordKey === recordKey) this.cutRecordKey = ''
+    this.selectedRecordKeys.delete(recordKey)
+    this.replayStateMap.delete(recordKey)
     this.refreshVisibleRecords()
     return true
   },
@@ -584,8 +809,11 @@ const RecordManager = {
       const name = message.data.propertiesName
       this.currentPageKey = message.data.pageKey || this.currentPageKey
       this.syncActionOptionsToScanned(message.data)
-      // 同一 target+anchorTarget 已有记录：只合并可变字段，保留历史，标记为已录制。
-      const byTarget = this.findContextRecordIndex(target, message.data.anchorTarget, message.data.pageKey)
+      // 普通按钮的每次有效人工点击都保留独立记录；输入/选择类动作仍按原语义合并。
+      const keepManualButton = isManualRecord && this.isButtonRecord(message.data)
+      const byTarget = keepManualButton
+        ? -1
+        : this.findContextRecordIndex(target, message.data.anchorTarget, message.data.pageKey)
       if (byTarget >= 0) {
         const existing = this.recordActionList[byTarget]
         this.recordActionList[byTarget] = {
@@ -608,6 +836,7 @@ const RecordManager = {
             ? message.data.options : existing.options,
           anchorTarget: message.data.anchorTarget || existing.anchorTarget,
           anchorPropertiesName: message.data.anchorPropertiesName || existing.anchorPropertiesName,
+          anchorRecordKey: message.data.anchorRecordKey || existing.anchorRecordKey,
           recorded: true,
           manualRecord: existing.manualRecord || isManualRecord
         }
@@ -639,7 +868,7 @@ const RecordManager = {
         this.ensurePageOrder(el)
         const target = el.target
         const name = el.propertiesName
-        const byTarget = this.findContextRecordIndex(target, el.anchorTarget, el.pageKey)
+        const byTarget = this.findScannedContextRecordIndex(target, el.anchorTarget, el.anchorRecordKey, el.pageKey)
         if (byTarget >= 0) {
           // 已存在（可能是人工录制过、也可能是上次扫描的）：
           // 保留首次分配的 propertiesID，人工状态也不被扫描覆盖。
@@ -666,6 +895,7 @@ const RecordManager = {
             disabled: el.disabled,
             anchorTarget: el.anchorTarget || existing.anchorTarget,
             anchorPropertiesName: el.anchorPropertiesName || existing.anchorPropertiesName,
+            anchorRecordKey: el.anchorRecordKey || existing.anchorRecordKey,
             recorded: existing.recorded || this.isVisibleRecord(el),
             manualRecord: existing.manualRecord || false
           }
@@ -711,6 +941,8 @@ const RecordManager = {
     this.manualOrderEnabled = false
     this.nextRecordKey = 1
     this.deletedScanKeys = new Set()
+    this.selectedRecordKeys = new Set()
+    this.replayStateMap = new Map()
     this.updateRecordCount()
   },
 
@@ -985,6 +1217,14 @@ const RecordManager = {
     }
 
     this.displayRoots.forEach(node => exportNode(node, null, this.groupScreenshots))
+    this.debugLog('export-groups-built', {
+      groupCount: result.filter(item => item.type !== 'ele').length,
+      actionCount: result.filter(item => item.type === 'ele').length,
+      groups: result.filter(item => item.type !== 'ele').map(item => ({
+        propertiesName: item.propertiesName,
+        propertiesPID: item.propertiesPID
+      }))
+    })
     return result
   },
 
@@ -1002,6 +1242,15 @@ const RecordManager = {
    */
   initEditBindings() {
     const self = this
+
+    $(document).on('click', '.record-select', function (e) { e.stopImmediatePropagation() })
+    $(document).on('change', '.record-select', function () {
+      self.toggleRecordSelection($(this).attr('data-record-key'), this.checked)
+    })
+    $(document).on('click', '.group-select', function (e) { e.stopImmediatePropagation() })
+    $(document).on('change', '.group-select', function () {
+      self.selectGroupRecords($(this).attr('data-group-key'), this.checked)
+    })
 
     // 保存编辑后的事件类型
     $('#saveCmdBtn').click(function () {

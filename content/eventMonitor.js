@@ -53,6 +53,61 @@ const EventMonitor = {
   },
 
   /**
+   * 找到表格单元格内可人工录制的操作元素。
+   * 表格仍由自动扫描器整体排除；这里仅处理用户实际点击的表单控件和按钮。
+   * 很多表格操作使用 span/div 包裹图标，实际 click target 往往是 svg/i，
+   * 这类节点自身没有文本、子元素或 onclick，不能直接用作录制目标。
+   */
+  getTableActionElement(element) {
+    if (!element || typeof element.closest !== 'function') return null
+    const cell = element.closest('td, th')
+    if (!cell) return null
+
+    let current = element
+    while (current && current !== cell) {
+      if (current.matches && current.matches(
+        '[onclick], [role="button"], [role="link"], [role="radio"], [role="checkbox"], [tabindex], button, a, .el-radio, .el-checkbox'
+      )) {
+        return current
+      }
+      current = current.parentElement
+    }
+
+    current = element
+    while (current && current !== cell) {
+      const className = typeof current.className === 'string' ? current.className : ''
+      if (current.hasAttribute && (
+        current.hasAttribute('title') || current.hasAttribute('aria-label') ||
+        current.hasAttribute('data-action') || current.hasAttribute('data-command') ||
+        /(?:action|operate|operation|btn|button|edit|delete|remove|view|detail|link)/i.test(className)
+      )) {
+        return current
+      }
+      try {
+        const style = window.getComputedStyle(current)
+        if (style.cursor === 'pointer' && (
+          current !== element || (current.style && current.style.cursor === 'pointer')
+        )) return current
+      } catch (e) {}
+      current = current.parentElement
+    }
+
+    return null
+  },
+
+  /**
+   * 将按钮内部的文字、图标等点击目标归一到实际可操作的按钮根节点。
+   * 表单中的 button 也应作为点击操作，而不是按其父级表单控件处理。
+   */
+  getClickActionElement(element) {
+    if (!element || typeof element.closest !== 'function') return null
+    return element.closest(
+      'button, a, input[type="button"], input[type="submit"], input[type="reset"], ' +
+      '[role="button"], [role="link"], [role="tab"], .el-button'
+    )
+  },
+
+  /**
    * 注册页面 change 和 click 事件监听（捕获阶段）。
    * 调用位置：content.js → startRecordEvent / continueRecordEvent
    */
@@ -128,7 +183,30 @@ const EventMonitor = {
           Recorder.monitorDateInput(dateInput, action)
         }
       } else {
-        // Element UI 单选/多选会在 click 后触发原生 input 的 change；由 change 分支统一记录。
+        const clickAction = this.getClickActionElement(target)
+        if (clickAction) {
+          clickAction.command = 'click'
+          clickAction.commandCnStr = '点击'
+          Recorder.setAttributeAction(clickAction)
+          return
+        }
+
+        // Element UI 单选/多选通常由内部 input 触发 change；表格内的自定义单选框
+        // 可能只派发组件事件，且 table 会被扫描器排除，因此这里补录外层控件。
+        const tableFormControl = target.closest('td, th') && target.closest('.el-radio, .el-checkbox')
+        if (tableFormControl) {
+          const inputType = tableFormControl.classList.contains('el-radio') ? 'radio' : 'checkbox'
+          const formInput = tableFormControl.querySelector('input[type="' + inputType + '"]') || tableFormControl
+          formInput.command = inputType === 'radio' ? 'radio' : 'select'
+          formInput.commandCnStr = inputType === 'radio' ? '单选' : '下拉框选择'
+          Recorder.setAction(formInput, {
+            type: 'ATTRIBUTE',
+            // 捕获阶段发生在浏览器切换 checked 之前，记录点击后的目标状态。
+            objectValue: inputType === 'radio' ? true : !formInput.checked,
+            hasRecordedValue: true
+          })
+          return
+        }
         if (target.closest('.el-radio, .el-checkbox')) {
           return
         }
@@ -139,6 +217,13 @@ const EventMonitor = {
           const action = Recorder.setAttributeAction(treeInputEle);
           TreeSelectHandler.startTreeSelectCandidate(treeInputEle, action)
         } else if (!target.matches('input, textarea')) {
+          const tableAction = this.getTableActionElement(target)
+          if (tableAction) {
+            tableAction.command = 'click'
+            tableAction.commandCnStr = '点击'
+            Recorder.setAttributeAction(tableAction)
+            return
+          }
           if (this.isInvalidBlankClick(target)) {
             return
           }

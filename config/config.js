@@ -10,7 +10,8 @@ var APP_DEFAULT_CONFIG = {
     maxPixels: 25000000
   },
   upload: {
-    baseUrl: 'http://172.20.101.63:11002'
+    baseUrl: 'http://172.20.101.63:11002',
+    accessToken: ''
   }
 };
 
@@ -18,3 +19,4 @@ var APP_DEFAULT_CONFIG = {
 var screenshotDownloadDirectory = APP_DEFAULT_CONFIG.screenshot.downloadDirectory;
 var screenshotMaxPixels = APP_DEFAULT_CONFIG.screenshot.maxPixels;
 var BASEURL = APP_DEFAULT_CONFIG.upload.baseUrl;
+var ACCESS_TOKEN = APP_DEFAULT_CONFIG.upload.accessToken;

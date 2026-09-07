@@ -17,6 +17,7 @@ const UploadService = {
   uploadScreenshot(blob, filename) {
     return new Promise((resolve, reject) => {
       const baseUrl = String(typeof BASEURL === 'undefined' ? '' : BASEURL).trim().replace(/\/+$/, '')
+      const accessToken = String(typeof ACCESS_TOKEN === 'undefined' ? '' : ACCESS_TOKEN).trim()
       if (!baseUrl) {
         reject(new Error('未配置截图上传服务地址 BASEURL'))
         return
@@ -27,12 +28,16 @@ const UploadService = {
       fd.append('file', new File([blob], fileName, { type: blob.type || 'image/png' }))
 
       $.ajax({
-        url: baseUrl + '/api/common/paasfile/uploadTranscationFile',
+        // url: baseUrl + '/api/common/paasfile/uploadTranscationFile',
+        url: baseUrl + '/api/common/paasfile/upload',
         type: 'post',
         contentType: false,
         async: true,
         data: fd,
         processData: false,
+        beforeSend: function (xhr) {
+          if (accessToken) xhr.setRequestHeader('access_token', accessToken)
+        },
         success: function (res) {
           let result = res
           if (typeof result === 'string') {
@@ -66,20 +71,22 @@ const UploadService = {
   },
 
   /** 生成当前录制动作的 JSON 文本。 */
-  buildActionExportContent() {
-    return Utils.actionTree2Json(RecordManager.buildExportGroups(), RecordManager.recordDataUrl, RecordManager.pageId)
+  buildActionExportContent(name) {
+    return Utils.actionTree2Json(RecordManager.buildExportGroups(), RecordManager.recordDataUrl, RecordManager.pageId, name)
   },
 
   /** 下载当前录制的动作列表为 JSON 文件。 */
-  downloadActionsJson() {
-    const content = this.buildActionExportContent()
-    Utils.saveAsBlobFile(new Blob([content], { type: 'application/json;charset=utf-8' }), 'result.json')
+  downloadActionsJson(name) {
+    const fileName = normalizeDownloadName(name, 'json')
+    const content = this.buildActionExportContent(fileName)
+    Utils.saveAsBlobFile(new Blob([content], { type: 'application/json;charset=utf-8' }), fileName + '.json')
   },
 
   /** 下载当前录制的动作列表为 TXT 文件，内容仍采用 JSON 数据结构。 */
-  downloadActionsTxt() {
-    const content = this.buildActionExportContent()
-    Utils.saveAsBlobFile(new Blob([content], { type: 'text/plain;charset=utf-8' }), 'result.txt')
+  downloadActionsTxt(name) {
+    const fileName = normalizeDownloadName(name, 'txt')
+    const content = this.buildActionExportContent(fileName)
+    Utils.saveAsBlobFile(new Blob([content], { type: 'text/plain;charset=utf-8' }), fileName + '.txt')
   },
 
   /**
@@ -163,4 +170,12 @@ const UploadService = {
       }
     })
   }
+}
+
+/** 清理用户输入的导出名称，并去掉用户已填写的同类扩展名。 */
+function normalizeDownloadName(name, format) {
+  let fileName = String(name || '').trim()
+  const extension = '.' + format
+  if (fileName.toLowerCase().endsWith(extension)) fileName = fileName.slice(0, -extension.length).trim()
+  return fileName || 'result'
 }

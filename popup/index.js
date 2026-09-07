@@ -10,8 +10,8 @@
  */
 
 window.onload = async function () {
+  await SettingsUI.init()
   main();
-  SettingsUI.init()
   // 调用 popup/autoFill.js → AutoFillUI.init
   AutoFillUI.init()
   // popup 打开时通知 content script 触发页面扫描
@@ -43,7 +43,7 @@ async function ensureContentInjected(tabId) {
     }
     await chrome.scripting.executeScript({
       target: { tabId },
-      files: ['/libs/utils.js', '/libs/autoFormFill.js', '/libs/smartSelector.js', '/libs/elementBusinessName.js', '/libs/myXPathHelper.js', '/config/scannerExclude.js', '/libs/elementGrouper.js', '/libs/pageElementScanner.js', '/content/recorder.js', '/content/treeSelectHandler.js', '/content/eventMonitor.js', '/content/messageHandler.js', '/content/pageElementScannerController.js', '/content/content.js']
+      files: ['/libs/utils.js', '/libs/autoFormFill.js', '/libs/smartSelector.js', '/libs/elementBusinessName.js', '/libs/myXPathHelper.js', '/config/scannerExclude.js', '/libs/elementGrouper.js', '/libs/pageElementScanner.js', '/content/recorder.js', '/content/treeSelectHandler.js', '/content/eventMonitor.js', '/content/messageHandler.js', '/content/replayer.js', '/content/pageElementScannerController.js', '/content/content.js']
     })
     await new Promise(resolve => setTimeout(resolve, 500))
   })()
@@ -137,6 +137,17 @@ async function main() {
   // 调用 popup/recordManager.js → RecordManager.initEditBindings
   RecordManager.initEditBindings()
   initBottomActions()
+  initReplayControls()
+}
+
+function initReplayControls() {
+  $('#selectAllRecords').on('change', function () {
+    RecordManager.selectAllVisibleRecords(this.checked)
+  })
+  $('#replayBtn').on('click', function () { ReplayService.start() })
+  $('#cancelReplayBtn').on('click', function () {
+    if (confirm('取消后将停止后续操作，已经执行的页面操作不会自动回滚，是否继续？')) ReplayService.stop()
+  })
 }
 
 /**
@@ -188,11 +199,15 @@ function initRecordControls() {
     if (resp) setRecordingUI('idle')
   })
 
-  //点击暂停按钮
-  pauseBtn.addEventListener('click', async () => {
+  // 暂停录制：暂停按钮和回放验证开始前共用此处理逻辑。
+  async function pauseRecording() {
     const resp = await sendToTab('pauseRecording')
     if (resp) setRecordingUI('paused')
-  })
+    return resp
+  }
+
+  window.pauseRecording = pauseRecording
+  pauseBtn.addEventListener('click', pauseRecording)
 
   //点击继续按钮
   continueBtn.addEventListener('click', async () => {
@@ -232,12 +247,24 @@ function initBottomActions() {
 
   // 调用 popup/uploadService.js → UploadService.downloadActionsJson
   $('#downloadJsonBtn').click(function () {
-    UploadService.downloadActionsJson()
+    openDownloadDialog('json')
   })
 
   // 调用 popup/uploadService.js → UploadService.downloadActionsTxt
   $('#downloadTxtBtn').click(function () {
-    UploadService.downloadActionsTxt()
+    openDownloadDialog('txt')
+  })
+
+  $('#closeDownloadNameBtn, #cancelDownloadNameBtn').click(closeDownloadDialog)
+  $('#confirmDownloadNameBtn').click(confirmDownload)
+  $('#downloadNameInput').on('keydown', function (event) {
+    if (event.key === 'Enter') {
+      event.preventDefault()
+      confirmDownload()
+    } else if (event.key === 'Escape') {
+      event.preventDefault()
+      closeDownloadDialog()
+    }
   })
 
   // 调用 popup/uploadService.js → UploadService.downloadAllElements
@@ -249,6 +276,49 @@ function initBottomActions() {
   $('#submitBtn').click(function () {
     UploadService.submitRecordUpload()
   })
+}
+
+let pendingDownloadFormat = ''
+
+function openDownloadDialog(format) {
+  pendingDownloadFormat = format
+  const dialog = document.getElementById('downloadNameDialog')
+  const input = document.getElementById('downloadNameInput')
+  const error = document.getElementById('downloadNameError')
+  if (!dialog || !input) return
+  input.value = ''
+  if (error) error.textContent = ''
+  dialog.classList.add('open')
+  dialog.setAttribute('aria-hidden', 'false')
+  input.focus()
+}
+
+function closeDownloadDialog() {
+  const dialog = document.getElementById('downloadNameDialog')
+  if (!dialog) return
+  dialog.classList.remove('open')
+  dialog.setAttribute('aria-hidden', 'true')
+  pendingDownloadFormat = ''
+}
+
+function confirmDownload() {
+  const input = document.getElementById('downloadNameInput')
+  const error = document.getElementById('downloadNameError')
+  const name = input ? input.value.trim() : ''
+  if (!name) {
+    if (error) error.textContent = '请输入下载文件名称'
+    if (input) input.focus()
+    return
+  }
+  if (/[\\/:*?"<>|]/.test(name)) {
+    if (error) error.textContent = '名称不能包含 \\ / : * ? " < > |'
+    if (input) input.focus()
+    return
+  }
+  const format = pendingDownloadFormat
+  closeDownloadDialog()
+  if (format === 'json') UploadService.downloadActionsJson(name)
+  if (format === 'txt') UploadService.downloadActionsTxt(name)
 }
 
 // ==================== 接收来自 content 的录制消息 ====================
@@ -278,6 +348,10 @@ function updateScanStatus(data) {
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === 'scanStatus') {
     updateScanStatus(message.data)
+    return
+  }
+  if (message.type === 'replayProgress' || message.type === 'replayComplete' || message.type === 'replayStarted') {
+    ReplayService.handleMessage(message)
     return
   }
   RecordManager.handleMessage(message)

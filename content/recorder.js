@@ -138,6 +138,9 @@ const Recorder = {
     if (!element) return ''
 
     const tagName = element.tagName
+    if (tagName === 'INPUT' && (element.type === 'checkbox' || element.type === 'radio')) {
+      return !!element.checked
+    }
     if (tagName === 'INPUT' || tagName === 'TEXTAREA') {
       const TagProto = tagName === 'TEXTAREA' ? HTMLTextAreaElement : HTMLInputElement
       const descriptor = Object.getOwnPropertyDescriptor(TagProto.prototype, 'value')
@@ -202,9 +205,13 @@ const Recorder = {
    * 调用位置：content/eventMonitor.js → change/click 事件处理
    */
   setAttributeAction(element) {
+    const action = Utils.normalizeEventType(element && element.command)
     return this.setAction(element, {
       type: ACTION_TYPE_ATTRIBUTE,
-      objectValue: this.getInputValue(element)
+      objectValue: this.getInputValue(element),
+      // A user change to an input/selection is meaningful even when its value is empty.
+      hasRecordedValue: ['input', 'date', 'radio'].includes(action) ||
+        (element && element.tagName === 'INPUT' && element.type === 'checkbox')
     });
   },
 
@@ -234,6 +241,7 @@ const Recorder = {
         action.scanIndex = scannedInfo.scanIndex
         action.anchorTarget = scannedInfo.anchorTarget || ''
         action.anchorPropertiesName = scannedInfo.anchorPropertiesName || ''
+        action.anchorRecordKey = scannedInfo.anchorRecordKey || ''
         if (scannedInfo.options && scannedInfo.options.length > 0 && (!action.options || action.options.length === 0)) {
           action.options = scannedInfo.options
         }
@@ -244,6 +252,7 @@ const Recorder = {
         if (pendingAnchor) {
           action.anchorTarget = pendingAnchor.target
           action.anchorPropertiesName = pendingAnchor.propertiesName
+          action.anchorRecordKey = pendingAnchor.recordKey || ''
         }
       }
     }
@@ -259,6 +268,17 @@ const Recorder = {
     // 人工录制标记：所有 setAction 产生的动作都来自用户真实操作
     action.manualRecord = true
     action.recorded = true
+    // 同一个 DOM 按钮的多次点击是不同的动作实例，不能复用 idMap 中的扫描 ID。
+    // 下拉框 select + selectOption 的后续合并仍由下面的专用逻辑处理。
+    action.propertiesID = this.getID()
+    if (typeof PageElementScannerController !== 'undefined' &&
+        typeof PageElementScannerController.setTriggerRecordKey === 'function') {
+      PageElementScannerController.setTriggerRecordKey(element, action.propertiesID)
+      if (typeof PageElementScannerController.getTriggerContextByElement === 'function') {
+        const triggerContext = PageElementScannerController.getTriggerContextByElement(element)
+        if (triggerContext) action.triggerRecordKey = triggerContext.recordKey || ''
+      }
+    }
 
     const lastAction = this.actions[this.actions.length - 1];
     if (this.actions.length > 0 && lastAction.eventTypeValue === 'select:click' && element.command === 'selectOption') {

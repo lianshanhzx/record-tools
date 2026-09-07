@@ -14,7 +14,7 @@ const SettingsUI = {
     document.addEventListener('keydown', (event) => {
       if (event.key === 'Escape') this.close()
     })
-    this.load()
+    return this.load()
   },
 
   async load() {
@@ -37,6 +37,7 @@ const SettingsUI = {
     document.getElementById('settingsScreenshotDirectory').value = config.screenshot.downloadDirectory
     document.getElementById('settingsScreenshotMaxPixels').value = config.screenshot.maxPixels
     document.getElementById('settingsUploadBaseUrl').value = config.upload.baseUrl
+    document.getElementById('settingsUploadAccessToken').value = config.upload.accessToken
   },
 
   open() {
@@ -64,7 +65,8 @@ const SettingsUI = {
         maxPixels: Number(document.getElementById('settingsScreenshotMaxPixels').value)
       },
       upload: {
-        baseUrl: document.getElementById('settingsUploadBaseUrl').value.trim().replace(/\/+$/, '')
+        baseUrl: document.getElementById('settingsUploadBaseUrl').value.trim().replace(/\/+$/, ''),
+        accessToken: document.getElementById('settingsUploadAccessToken').value.trim()
       }
     }
   },
@@ -82,6 +84,7 @@ const SettingsUI = {
     screenshotDownloadDirectory = config.screenshot.downloadDirectory
     screenshotMaxPixels = config.screenshot.maxPixels
     BASEURL = config.upload.baseUrl
+    ACCESS_TOKEN = config.upload.accessToken
   },
 
   async save() {

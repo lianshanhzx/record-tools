@@ -73,6 +73,11 @@
     assert(data.pageId === 'ZJJK00066153', '导出缺少 pageId')
   }))
 
+  testResults.push(run('导出名称写入顶层 name', function () {
+    const data = JSON.parse(Utils.actionTree2Json([], 'https://example.test', 'page-1', '业务流程'))
+    assert(data.name === '业务流程', '导出名称错误')
+  }))
+
   const passedCount = testResults.filter(Boolean).length
   const passed = passedCount === testResults.length
   summary.className = passed ? 'pass' : 'fail'

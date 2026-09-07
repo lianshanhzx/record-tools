@@ -86,9 +86,9 @@ function generatePageId(timestamp) {
  * @param {string} url 录制页面 URL
  * @returns {string}
  */
-function actionTree2Json(groups, url, pageId) {
+function actionTree2Json(groups, url, pageId, name) {
   return JSON.stringify({
-    id: uuid(), name: 'test', pageId: pageId || '', url,
+    id: uuid(), name: name || 'test', pageId: pageId || '', url,
     transcationProperties: groups || []
   })
 }
