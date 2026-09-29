@@ -155,7 +155,13 @@ const CollectService = {
       }))
       return Object.assign({}, action, { networkCalls: calls })
     })
+
+    const transcationProperties = this.buildTransactionProperties(actionsWithNetwork)
+
     return {
+      id: this.generateSessionId(),
+      name: 'collect',
+      url: tabInfo.url || '',
       sessionId: session.sessionId,
       extensionVersion: chrome.runtime.getManifest().version,
       mode: 'collect',
@@ -168,8 +174,140 @@ const CollectService = {
         title: tabInfo.title || ''
       },
       pageConfig: session.pageConfig || {},
-      actions: actionsWithNetwork
+      transcationProperties
     }
+  },
+
+  /**
+   * 将动作列表按 group 路径构建成录制同款的扁平 id/pid 层级结构。
+   * 分组节点只保留最精简字段，操作节点保留采集字段并去掉冗余的 group 数组。
+   */
+  buildTransactionProperties(actions) {
+    const tree = this.buildGroupTree(actions)
+    const nameMap = this.dedupGroupNames(tree.roots)
+    return this.flattenGroupTree(tree.roots, nameMap)
+  },
+
+  buildGroupTree(actions) {
+    const roots = []
+    const nodeMap = new Map()
+    const DEFAULT_PAGE_KEY = '__collect_default_page__'
+
+    for (const action of actions || []) {
+      const path = Array.isArray(action.group)
+        ? action.group.filter(g => g && (g.key || g.propertiesName))
+        : []
+
+      let parentKey = ''
+      let parentEntries = roots
+      let deepestNode = null
+
+      for (let i = 0; i < path.length; i++) {
+        const g = path[i]
+        const nodeKey = (parentKey ? parentKey + '|' : '') + (g.type || 'group') + ':' + (g.key || g.propertiesName)
+
+        let node = nodeMap.get(nodeKey)
+        if (!node) {
+          node = {
+            _key: nodeKey,
+            type: g.type || 'group',
+            propertiesName: g.propertiesName || '分组',
+            key: g.key || '',
+            url: g.url || '',
+            parentKey: parentKey || null,
+            entries: []
+          }
+          nodeMap.set(nodeKey, node)
+          parentEntries.push({ kind: 'group', node })
+        }
+
+        deepestNode = node
+        parentKey = nodeKey
+        parentEntries = node.entries
+      }
+
+      if (!deepestNode) {
+        let node = nodeMap.get(DEFAULT_PAGE_KEY)
+        if (!node) {
+          node = {
+            _key: DEFAULT_PAGE_KEY,
+            type: 'page',
+            propertiesName: '主页面',
+            key: DEFAULT_PAGE_KEY,
+            url: '',
+            parentKey: null,
+            entries: []
+          }
+          nodeMap.set(DEFAULT_PAGE_KEY, node)
+          roots.push({ kind: 'group', node })
+        }
+        deepestNode = node
+      }
+
+      deepestNode.entries.push({ kind: 'action', action })
+    }
+
+    return { roots, nodeMap }
+  },
+
+  dedupGroupNames(roots) {
+    const usedNames = new Set()
+    const names = new Map()
+
+    function reserve(entry) {
+      if (entry.kind !== 'group') return
+      const node = entry.node
+      const baseName = (node.propertiesName || '').replace(/\//g, '或')
+      let uniqueName = baseName
+      if (baseName && usedNames.has(baseName)) {
+        let index = 1
+        while (usedNames.has(baseName + '_' + index)) index++
+        uniqueName = baseName + '_' + index
+      }
+      if (baseName) usedNames.add(uniqueName)
+      names.set(node, uniqueName)
+      node.entries.filter(e => e.kind === 'group').forEach(reserve)
+    }
+
+    roots.forEach(reserve)
+    return names
+  },
+
+  flattenGroupTree(roots, nameMap) {
+    const result = []
+
+    function visitGroup(groupId, parentId, node) {
+      result.push({
+        propertiesID: groupId,
+        propertiesPID: parentId,
+        type: node.type,
+        propertiesName: nameMap.get(node) || node.propertiesName,
+        key: node.key,
+        url: node.url
+      })
+
+      node.entries.forEach(entry => {
+        if (entry.kind === 'group') {
+          visitGroup(CollectService.generateSessionId(), groupId, entry.node)
+        } else {
+          const exported = Object.assign({}, entry.action)
+          delete exported.group
+          result.push(Object.assign(exported, {
+            propertiesID: CollectService.generateSessionId(),
+            propertiesPID: groupId,
+            type: 'ele'
+          }))
+        }
+      })
+    }
+
+    roots.forEach(entry => {
+      if (entry.kind === 'group') {
+        visitGroup(CollectService.generateSessionId(), null, entry.node)
+      }
+    })
+
+    return result
   },
 
   formatDate(ts) {
