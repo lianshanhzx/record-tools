@@ -8,7 +8,7 @@
  *   - LLMService (background/llmService.js)     — LLM 调用服务
  */
 
-importScripts('../config/config.js', 'popupManager.js', 'llmService.js')
+importScripts('../config/config.js', 'popupManager.js', 'llmService.js', 'collectService.js')
 
 // ==================== 全局状态 ====================
 let monitorStates = {}
@@ -143,8 +143,49 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 })
 
 // ==================== 扩展图标点击 ====================
-// 调用 background/popupManager.js → PopupManager.openOpertePopup
 chrome.action.onClicked.addListener(async (tab) => {
+  const mode = typeof APP_MODE !== 'undefined' ? APP_MODE : 'record'
+
+  if (mode === 'collect') {
+    // 采集模式：直接在当前标签页开始采集（若已采集则忽略，结束由页面标记控制）。
+    console.log('[SW] collect mode icon click, tab=', tab && tab.id)
+    if (!tab || !tab.id) return
+    await CollectService.init()
+    const session = CollectService.getActiveSession(tab.id)
+    if (session) {
+      console.log('[SW] collect session already active')
+      // 已在采集中，给 content 发送一个提示（可选）。
+      try {
+        await chrome.tabs.sendMessage(tab.id, { type: 'collectPing' })
+      } catch (e) {}
+      return
+    }
+    const result = await CollectService.startCollect(tab.id)
+    console.log('[SW] startCollect result', result)
+    await CollectService.updateTabInfo(tab.id)
+    try { await chrome.tabs.update(tab.id, { active: true }) } catch (e) {}
+    // 如果 content scripts 未注入（扩展加载前已打开的页面），尝试自动注入。
+    const ready = await isCollectContentScriptReady(tab.id)
+    if (!ready) {
+      console.log('[SW] content scripts not ready, try inject')
+      await ensureContentScriptsInjected(tab.id)
+    }
+    try {
+      await chrome.tabs.sendMessage(tab.id, { type: 'collectStarted', sessionId: result.sessionId })
+    } catch (e2) {
+      console.warn('[SW] send collectStarted failed', e2)
+    }
+    return
+  }
+
+  if (mode === 'both') {
+    // 双模式：打开选择页。
+    if (!tab || !tab.id) return
+    await openModeChooser(tab.id)
+    return
+  }
+
+  // 录制模式（默认）：调用 background/popupManager.js → PopupManager.openOpertePopup
   const existingPopup = await PopupManager.findPopupWindow()
   if (!existingPopup) {
     try {
@@ -155,6 +196,122 @@ chrome.action.onClicked.addListener(async (tab) => {
   }
   await PopupManager.openOpertePopup(undefined, tab && tab.id)
 });
+
+async function openModeChooser(tabId) {
+  const url = chrome.runtime.getURL('popup/mode.html') + '?tabId=' + encodeURIComponent(tabId)
+  const windows = await chrome.windows.getAll({ populate: true })
+  const existing = windows.find(win => {
+    return win.type === 'popup' && win.tabs?.some(tab => tab.url && tab.url.startsWith(chrome.runtime.getURL('popup/mode.html')))
+  })
+  if (existing) {
+    // 用户在不同标签页点击图标时，关闭旧选择页并重新打开，避免 tabId 过期。
+    try { await chrome.windows.remove(existing.id) } catch (e) {}
+  }
+  await chrome.windows.create({
+    url,
+    type: 'popup',
+    width: 300,
+    height: 220,
+    left: 100,
+    top: 100,
+    focused: true
+  })
+}
+
+async function getActiveTab() {
+  const tabs = await chrome.tabs.query({ active: true, lastFocusedWindow: true })
+  return tabs && tabs[0]
+}
+
+// 探测目标标签页的采集 content scripts 是否已经注入。
+async function isCollectContentScriptReady(tabId) {
+  try {
+    const results = await chrome.scripting.executeScript({
+      target: { tabId },
+      func: () => ({
+        hasCollector: typeof Collector !== 'undefined',
+        hasOverlay: typeof CollectOverlay !== 'undefined'
+      })
+    })
+    const r = results && results[0] && results[0].result
+    const ready = !!(r && r.hasCollector && r.hasOverlay)
+    console.log('[SW] probe content scripts ready=', ready)
+    return ready
+  } catch (e) {
+    console.warn('[SW] probe content scripts failed', e)
+    return false
+  }
+}
+
+// 当标签页在扩展加载前已打开时，content scripts 不会自动注入，需要手动补齐。
+async function ensureContentScriptsInjected(tabId) {
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      files: [
+        '/config/config.js', '/libs/utils.js', '/libs/autoFormFill.js', '/libs/smartSelector.js',
+        '/libs/elementBusinessName.js', '/libs/myXPathHelper.js', '/config/scannerExclude.js',
+        '/libs/elementGrouper.js', '/libs/pageElementScanner.js', '/content/recorder.js',
+        '/content/treeSelectHandler.js', '/content/eventMonitor.js', '/content/messageHandler.js',
+        '/content/replayer.js', '/content/pageElementScannerController.js', '/content/content.js',
+        '/collect/collector.js', '/collect/overlay.js'
+      ]
+    })
+    console.log('[SW] content scripts injected into tab', tabId)
+    // 等待脚本初始化完成
+    await new Promise(resolve => setTimeout(resolve, 500))
+  } catch (e) {
+    console.warn('[SW] inject content scripts failed', e)
+  }
+}
+
+// ==================== 模式选择页消息 ====================
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message.type === 'startRecordTool') {
+    const tabId = message.tabId
+    if (!tabId) {
+      sendResponse({ error: '未找到目标标签页' })
+      return true
+    }
+    ;(async () => {
+      const existingPopup = await PopupManager.findPopupWindow()
+      if (!existingPopup) {
+        try { await clearPreviousScreenshots() } catch (e) {}
+      }
+      await PopupManager.openOpertePopup(undefined, tabId)
+      sendResponse({ ok: true })
+    })()
+    return true
+  }
+
+  if (message.type === 'startCollectTool') {
+    const tabId = message.tabId
+    if (!tabId) {
+      sendResponse({ error: '未找到目标标签页' })
+      return true
+    }
+    ;(async () => {
+      const result = await CollectService.startCollect(tabId)
+      await CollectService.updateTabInfo(tabId)
+      try { await chrome.tabs.update(tabId, { active: true }) } catch (e) {}
+      // 如果 content scripts 未注入（扩展加载前已打开的页面），尝试自动注入。
+      const ready = await isCollectContentScriptReady(tabId)
+      if (!ready) {
+        console.log('[SW] content scripts not ready, try inject')
+        await ensureContentScriptsInjected(tabId)
+      }
+      try {
+        await chrome.tabs.sendMessage(tabId, { type: 'collectStarted', sessionId: result.sessionId })
+      } catch (e2) {
+        console.warn('[SW] send collectStarted failed', e2)
+      }
+      sendResponse(result)
+    })()
+    return true
+  }
+
+  return false
+})
 
 // ==================== 外部消息监听 ====================
 chrome.runtime.onMessageExternal.addListener(function (request, sender, sendResponse) {

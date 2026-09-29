@@ -9,16 +9,21 @@
  *   - MessageHandler (content/messageHandler.js)  — 消息通信
  */
 
+const isTopFrame = window === window.top
+
 // 初始化时向后台查询当前标签页是否已被标记为"正在录制"，
 // 若是，则自动恢复录制事件监听（用于刷新页面后继续录制）。
-chrome.runtime.sendMessage({ type: "initMonitor" }, (response) => {
-  if (response && response.monitorStates) {
-    if (response.popupOpen && typeof PageElementScannerController !== 'undefined') {
-      PageElementScannerController.onPopupOpened()
+// 录制恢复只在顶层 frame 进行；采集恢复由各 frame 自己负责（collect/collector.js）。
+if (isTopFrame) {
+  chrome.runtime.sendMessage({ type: "initMonitor" }, (response) => {
+    if (response && response.monitorStates) {
+      if (response.popupOpen && typeof PageElementScannerController !== 'undefined') {
+        PageElementScannerController.onPopupOpened()
+      }
+      startRecordEvent()
     }
-    startRecordEvent()
-  }
-})
+  })
+}
 
 // ==================== 录制生命周期函数 ====================
 
@@ -29,6 +34,7 @@ chrome.runtime.sendMessage({ type: "initMonitor" }, (response) => {
  *           content/content.js → initMonitor 回调
  */
 function startRecordEvent() {
+  if (!isTopFrame) return
   const startUrl = window.location.href;
   // 调用 messageHandler.js → sendBackMessage
   MessageHandler.sendBackMessage('startRecord', startUrl);
@@ -43,6 +49,7 @@ function startRecordEvent() {
  * 调用位置：content/messageHandler.js → onMessage (continueRecording)
  */
 function continueRecordEvent() {
+  if (!isTopFrame) return
   MessageHandler.sendBackMessage('startRecord', window.location.href)
   // 调用 eventMonitor.js → listener
   EventMonitor.listener(document)
@@ -54,6 +61,7 @@ function continueRecordEvent() {
  * 调用位置：content/messageHandler.js → onMessage (pauseRecording)
  */
 function pauseRecordEvent() {
+  if (!isTopFrame) return
   EventMonitor.unlistener()
   // 调用 recorder.js → destroy
   Recorder.destroy()
@@ -67,6 +75,7 @@ function pauseRecordEvent() {
  * 调用位置：content/messageHandler.js → onMessage (stopRecording)
  */
 function stopRecordEvent() {
+  if (!isTopFrame) return
   EventMonitor.unlistener()
   // 调用 recorder.js → destroy
   Recorder.destroy()

@@ -5,6 +5,7 @@
 ## 功能特性
 
 - **网页操作录制**：录制点击、输入、下拉选择、日期选择、树形选择等操作
+- **操作数据采集工具**：以静默方式采集测试人员在页面上的真实操作，生成原始 JSON 供 Agent 知识库使用；支持 iframe、页面跳转续采、接口调用监听
 - **智能 XPath 选择器**：自动生成稳定、可读的定位路径
 - **路由页面扫描**：录制过程中检测 SPA 路由和整页跳转，新页面自动扫描并形成独立的“主页面”顶层分组
 - **智能自动填表**：基于 LLM 一句话自动填写 Element UI 表单
@@ -18,25 +19,33 @@
 ```
 record-tools/
 ├── background/
-│   ├── service-worker.js       # 后台入口：消息路由、全局录制状态标记
+│   ├── service-worker.js       # 后台入口：消息路由、全局录制/采集状态标记
 │   ├── popupManager.js         # 弹窗窗口管理（创建/聚焦 popup）
-│   └── llmService.js           # LLM 调用服务（prompt 构建、API 调用）
+│   ├── llmService.js           # LLM 调用服务（prompt 构建、API 调用）
+│   └── collectService.js       # 采集服务：会话管理、网络监听、JSON 下载
 ├── content/
 │   ├── content.js              # 内容脚本入口：初始化、录制生命周期管理
 │   ├── recorder.js             # 录制核心：状态管理、动作解析、元素值获取
 │   ├── treeSelectHandler.js    # 树形选择器处理（节点识别、弹窗检测）
 │   ├── eventMonitor.js         # 事件监听（change/click 事件注册与分发）
 │   └── messageHandler.js       # 消息通信 + 截图滚动目标识别与坐标回报（content 侧消息收发）
+├── collect/
+│   ├── collector.js            # 采集内容脚本：监听用户操作并上报
+│   ├── overlay.js              # 采集中悬浮标记（含计时与结束三选一）
+│   ├── downloader.html         # Offscreen 下载页面
+│   └── downloader.js           # Offscreen 下载逻辑
 ├── popup/
-│   ├── index.html              # 弹窗页面（含分组截图弹窗列表与预览）
+│   ├── index.html              # 录制弹窗页面（含分组截图弹窗列表与预览）
 │   ├── index.js                # 弹窗入口：录制控制、通信工具、消息分发
+│   ├── mode.html               # 双模式选择页（录制工具 / 采集工具）
+│   ├── mode.js                 # 模式选择页交互
 │   ├── autoFill.js             # 自动填表 UI（面板交互、日志、配置管理）
 │   ├── recordManager.js        # 录制数据管理（列表渲染、过滤、编辑、分组截图入口）
 │   ├── screenshotService.js    # 全页滚动截图：驱动滚动、逐屏捕获、裁切拼接、下载
 │   ├── uploadService.js        # 上传/下载服务（导出 JSON、提交到平台）
 │   └── index.css               # 弹窗样式
 ├── config/
-│   └── config.js               # 全局配置（接口地址、截图保存目录、截图像素上限）
+│   └── config.js               # 全局配置（运行模式、接口地址、截图/采集保存目录）
 ├── libs/                       # 第三方/业务库
 │   ├── jquery.js               # jQuery 库
 │   ├── utils.js                # 通用工具函数（uuid、action2Json、下载等）
@@ -74,7 +83,37 @@ openssl rsa -in private.pem -pubout -out public.pem
 3. 点击「加载已解压的扩展程序」
 4. 选择本项目根目录 `record-tools`
 
+## 运行模式
+
+扩展通过 `config/config.js` 中的 `APP_MODE` 控制行为：
+
+| 模式 | 说明 |
+| --- | --- |
+| `record` | 仅启用录制工具，点击扩展图标打开原有录制 popup |
+| `collect` | 仅启用采集工具，点击扩展图标直接开始采集 |
+| `both` | 点击扩展图标先弹出选择页，可切换“录制工具”或“采集工具” |
+
+默认值为 `'both'`。修改 `APP_MODE` 后需要在 `chrome://extensions` 中重新加载扩展。
+
 ## 使用说明
+
+### 采集工具
+
+1. 确保 `APP_MODE` 为 `'collect'` 或 `'both'`
+2. 在目标网页点击扩展图标（`both` 模式下选择“采集工具”）
+3. 页面右上角出现红色“采集中”悬浮标记，即可开始正常操作被测系统
+4. 操作结束后点击标记上的“结束”，选择：
+   - **通过**：保存本次采集数据到 `collect/<时间戳>_<sessionId>.json`
+   - **不通过**：同样保存数据，JSON 中 `result` 字段为 `fail`
+   - **废弃**：丢弃本次数据，不生成文件
+
+采集特性：
+
+- 页面跳转（包括 SPA 路由变化）后会自动恢复采集
+- 支持 iframe 内操作采集
+- 自动记录用户点击、输入、下拉选择、单选、日期选择、树形选择等有效操作
+- 自动记录操作触发后短时间内的接口调用（`url`、`method`、`statusCode`）
+- 保留元素业务名称和分组路径，不保留录制模式的自动扫描、表单助手、截图、回放功能
 
 ### 录制操作
 
@@ -194,6 +233,14 @@ openssl rsa -in private.pem -pubout -out public.pem
 | `trackScreenshotDownload` | Popup → Background | `runtime.sendMessage` | 异步响应 | 记录截图下载 ID，用于后续清理 |
 | `untrackScreenshotDownload` | Popup → Background | `runtime.sendMessage` | 异步响应 | 移除已清理截图对应的下载 ID |
 | 外部消息 | 外部扩展 → Background | `onMessageExternal` | 无响应 | 接收外部数据并打开弹窗 |
+
+| `collectInit` | Content → Background | `runtime.sendMessage` | 异步响应 | 页面加载时查询当前标签是否处于采集会话 |
+| `collectStart` | Background / Popup → Background | `runtime.sendMessage` | 异步响应 | 开始一次采集会话 |
+| `collectAction` | Content → Background | `runtime.sendMessage` | 异步响应 | 上报一条采集动作 |
+| `collectEnd` | Content → Background | `runtime.sendMessage` | 异步响应 | 结束采集并选择结果（pass/fail/discard） |
+| `collectStarted` | Background → Content | `tabs.sendMessage` | 无响应(广播) | 通知所有 frame 开始采集 |
+| `collectStopped` | Background → Content | `tabs.sendMessage` | 无响应(广播) | 通知所有 frame 停止采集 |
+| `collectDownloadJson` | Background → Offscreen | `runtime.sendMessage` | 异步响应 | 通过 offscreen document 下载 JSON |
 
 > **注**：`addActionData`、`actionProgress`、`actionComplete` 为高频广播消息，Background 端做了短路返回优化（`SKIP_IN_BG`），避免无效分支遍历。
 
@@ -539,11 +586,80 @@ Content
 
 ---
 
-### 场景 H：已清理的无效通道
+### 场景 H：采集流程
+
+#### H1. 开始采集
+
+```
+用户点击扩展图标（或选择页选择“采集工具”）
+  │  chrome.action.onClicked / startCollectTool
+  ▼
+Background (collectService.js)
+  │  CollectService.startCollect(tabId)
+  │    ├─ 创建会话（sessionId、startTime、actions[]、networkRequests[]）
+  │    ├─ chrome.tabs.sendMessage(tabId, { type: 'collectStarted' })
+  │    └─ 持久化到 chrome.storage.session
+  ▼
+Content (collect/collector.js) — 所有 frame
+  │  收到 collectStarted → 注册 change/click 监听
+  │  顶层 frame 调用 CollectOverlay.show() 显示红色标记
+```
+
+#### H2. 采集动作上报
+
+```
+用户操作页面
+  │  collect/collector.js 捕获 change/click
+  │    → 生成动作（XPath、业务名称、分组、objectValue、timestamp）
+  │    → chrome.runtime.sendMessage({ type: 'collectAction', action })
+  ▼
+Background (collectService.js)
+  │  CollectService.addAction(tabId, frameId, action)
+  │    ├─ 分配全局 seq
+  │    ├─ 关联时间窗口内的网络请求
+  │    └─ 追加到 session.actions
+```
+
+#### H3. 接口调用监听
+
+```
+页面发起 xhr/fetch 请求
+  │  chrome.webRequest.onCompleted
+  ▼
+Background (collectService.js)
+  │  CollectService.addNetworkRequest(details)
+  │    ├─ 过滤非目标标签页和扩展自身请求
+  │    └─ 保留 { requestId, url, method, statusCode, timestamp, frameId }
+```
+
+#### H4. 结束采集并下载
+
+```
+用户点击悬浮标记“结束”
+  │  选择 通过 / 不通过 / 废弃
+  ▼
+Content (collect/overlay.js)
+  │  chrome.runtime.sendMessage({ type: 'collectEnd', result })
+  ▼
+Background (collectService.js)
+  │  CollectService.endCollect(tabId, result)
+  │    ├─ pass/fail：组装 JSON → 通过 offscreen document 下载到 collect/ 目录
+  │    └─ discard：清空会话，不下载
+  │  chrome.tabs.sendMessage(tabId, { type: 'collectStopped' })
+  ▼
+Content
+  │  停止监听并隐藏标记
+```
+
+> **页面跳转续采**：会话状态保存在 Background + `chrome.storage.session`，新页面加载后各 frame 发送 `collectInit` 查询，若会话仍在采集中则自动恢复监听和标记。
+
+---
+
+### 场景 I：已清理的无效通道
 
 以下消息类型在代码中存在监听处理但从未被发送，已在重构中清理：`ping`、`logToConsole`、`rescanElements`、`openPopup`、`checkFlag`、`execute`、`start`、`refresh`（Background 侧 handler）。
 
-> 清理后的 Background 仅处理少量消息：`stopRecord` / `startRecord` / `initMonitor` / `getPopupTargetTab` / `callLLM` / `captureVisibleTabForScreenshot` / `trackScreenshotDownload` / `untrackScreenshotDownload`。
+> 清理后的 Background 除录制相关消息外，还处理采集消息：`collectInit` / `collectStart` / `collectAction` / `collectEnd` / `collectDownloadJson`，以及录制消息 `stopRecord` / `startRecord` / `initMonitor` / `getPopupTargetTab` / `callLLM` / `captureVisibleTabForScreenshot` / `trackScreenshotDownload` / `untrackScreenshotDownload`。
 
 ---
 
@@ -590,11 +706,13 @@ sendToContent(tabId, message)
 ## 开发注意事项
 
 - 插件基于 **Chrome Manifest V3**，请使用支持 MV3 的 Chrome 版本
-- **content 脚本加载顺序**：`libs/utils.js` → `libs/autoFormFill.js` → `libs/smartSelector.js` → `libs/elementBusinessName.js` → `libs/myXPathHelper.js` → `libs/pageElementScanner.js` → `content/recorder.js` → `content/treeSelectHandler.js` → `content/eventMonitor.js` → `content/messageHandler.js` → `content/content.js`，顺序不可随意调整
-- **background 脚本**：`service-worker.js` 通过 `importScripts()` 加载 `popupManager.js` 和 `llmService.js`
-- **popup 脚本加载顺序**：`config.js` → `jquery.js` → `utils.js` → `elementGrouper.js` → `recordManager.js` → `autoFill.js` → `uploadService.js` → `screenshotService.js` → `index.js`
+- **content 脚本加载顺序**：`config/config.js` → `libs/utils.js` → `libs/autoFormFill.js` → `libs/smartSelector.js` → `libs/elementBusinessName.js` → `libs/myXPathHelper.js` → `config/scannerExclude.js` → `libs/elementGrouper.js` → `libs/pageElementScanner.js` → `content/recorder.js` → `content/treeSelectHandler.js` → `content/eventMonitor.js` → `content/messageHandler.js` → `content/replayer.js` → `content/pageElementScannerController.js` → `content/content.js` → `collect/collector.js` → `collect/overlay.js`，顺序不可随意调整
+- **background 脚本**：`service-worker.js` 通过 `importScripts()` 加载 `popupManager.js`、`llmService.js` 和 `collectService.js`
+- **popup 脚本加载顺序**：`config.js` → `jquery.js` → `utils.js` → `elementGrouper.js` → `recordManager.js` → `replayService.js` → `settings.js` → `autoFill.js` → `uploadService.js` → `screenshotService.js` → `index.js`
 - 弹窗页面通过 `chrome.windows.create` 以 `popup` 类型打开
+- **权限说明**：采集功能依赖 `webRequest`（接口监听）和 `offscreen`（MV3 下生成下载 blob）；`host_permissions` 保持 `<all_urls>` 以支持跨域页面和 iframe
 - **截图相关配置**：`config/config.js` 中 `screenshotDownloadDirectory` 为下载子目录（只能配置相对路径），`screenshotMaxPixels` 为最终长图的像素上限
+- **采集相关配置**：`config/config.js` 中 `collect.downloadDirectory` 固定为 `collect`，`attributesAllowlist` 控制元素属性白名单，`networkAssociateMs` 控制动作与网络请求的时间关联窗口
 - **截图滚动与拼接**：
   - 滚动目标由 content 侧自动识别：优先普通文档滚动；当文档自身不可滚动且存在满足条件的内部滚动容器（常见于 Vue + Element UI）时，选择该容器并按其可视区域裁切拼图
   - 截图期间会禁用其它分组截图按钮，当前分组按钮显示「正在截图中 x/y」进度，并使用 `finally` 保证任务结束后恢复按钮

@@ -354,6 +354,9 @@ function getScreenshotTargetMetrics() {
 
 // ==================== 与 popup / background 的消息监听 ====================
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+  // 录制相关消息只在顶层 frame 处理，避免 all_frames 开启后子 frame 误响应。
+  if (window !== window.top) return false
+
   // 开始/恢复录制 → 调用 content.js → startRecordEvent
   if (request.type === 'start' || request.type === 'startRecording') {
     const initialize = typeof PageElementScannerController !== 'undefined'
