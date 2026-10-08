@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <title>Downloader tests</title>
+  <style>
+    body { font-family: sans-serif; padding: 20px; }
+    .pass { color: #18794e; }
+    .fail { color: #b42318; }
+  </style>
+</head>
+<body>
+  <p id="summary">运行中...</p>
+  <ol id="results"></ol>
+  <script>
+    let lastListener = null
+    window.chrome = {
+      runtime: {
+        onMessage: {
+          addListener: function (fn) { lastListener = fn }
+        },
+        sendMessage: function (request) {
+          return new Promise((resolve) => {
+            lastListener(request, {}, resolve)
+          })
+        }
+      }
+    }
+  </script>
+  <script src="../collect/downloader.js"></script>
+  <script src="downloader.test.js"></script>
+</body>
+</html>

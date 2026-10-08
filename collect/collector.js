@@ -195,6 +195,19 @@ const Collector = {
     return false
   },
 
+  /**
+   * 判断元素是否为弹窗/抽屉的包装器或遮罩层。
+   * 点击这些区域通常不是用户的有效操作（如点击遮罩但未关闭弹窗），
+   * 记录后会把同一弹窗的内容错误地切割到两个分组里。
+   */
+  isDialogWrapperElement(element) {
+    if (!element || typeof element.matches !== 'function') return false
+    return element.matches(
+      '.el-dialog__wrapper, .el-drawer__wrapper, .v-modal, .modal-backdrop, ' +
+      '.el-message-box__wrapper, [class*="dialog__wrapper"], [class*="drawer__wrapper"]'
+    )
+  },
+
   handleChange(event) {
     if (!this._collecting) return
     if (this.shouldIgnoreEvent(event)) return
@@ -231,6 +244,10 @@ const Collector = {
     if (this.shouldIgnoreEvent(event)) return
 
     const { target } = event
+
+    // 忽略弹窗包装器/遮罩层的点击，避免把弹窗内容切到两个分组。
+    if (this.isDialogWrapperElement(target)) return
+
     if (typeof TreeSelectHandler !== 'undefined') {
       TreeSelectHandler.clearExpiredTreeSelect && TreeSelectHandler.clearExpiredTreeSelect()
       const treeNodeEle = TreeSelectHandler.getTreeNodeElement && TreeSelectHandler.getTreeNodeElement(target)

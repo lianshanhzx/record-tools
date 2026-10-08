@@ -1,8 +1,9 @@
 /**
  * collect/downloader.js — Offscreen Document 下载器
  *
- * MV3 service worker 无法直接生成 blob URL，因此通过 offscreen document
- * 接收 JSON payload 后生成 blob 并调用 chrome.downloads.download。
+ * MV3 的 offscreen document 中无法使用 chrome.downloads API，
+ * 因此这里只负责把 JSON payload 转成 Blob 再读取为 ArrayBuffer，
+ * 通过消息返回给 service worker，由 service worker 调用 chrome.downloads.download。
  */
 
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
@@ -10,21 +11,22 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
   console.log('[Downloader] receive collectDownloadJson', request.filename)
   const { payload, filename } = request
-  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' })
-  const url = URL.createObjectURL(blob)
 
-  chrome.downloads.download({ url, filename, saveAs: false })
-    .then(downloadId => {
-      console.log('[Downloader] download started', downloadId)
-      sendResponse({ ok: true, downloadId })
-      // 释放 blob URL（下载已开始，保留短暂时间）。
-      setTimeout(() => URL.revokeObjectURL(url), 30000)
-    })
-    .catch(error => {
-      console.error('[Downloader] download failed', error)
-      URL.revokeObjectURL(url)
-      sendResponse({ ok: false, error: error.message })
-    })
+  try {
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' })
+    blob.arrayBuffer()
+      .then(arrayBuffer => {
+        console.log('[Downloader] blob converted to arrayBuffer, size=', arrayBuffer.byteLength)
+        sendResponse({ ok: true, arrayBuffer, filename })
+      })
+      .catch(error => {
+        console.error('[Downloader] blob conversion failed', error)
+        sendResponse({ ok: false, error: error.message })
+      })
+  } catch (error) {
+    console.error('[Downloader] create blob failed', error)
+    sendResponse({ ok: false, error: error.message })
+  }
 
   return true
 })

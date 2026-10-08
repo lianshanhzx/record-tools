@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <title>CollectService tests</title>
+  <style>
+    body { font-family: sans-serif; padding: 20px; }
+    .pass { color: #18794e; }
+    .fail { color: #b42318; }
+    pre { background: #f5f5f5; padding: 10px; overflow: auto; }
+  </style>
+</head>
+<body>
+  <p id="summary">运行中...</p>
+  <ol id="results"></ol>
+  <script>
+    window.APP_DEFAULT_CONFIG = {
+      collect: {
+        downloadDirectory: 'collect',
+        networkAssociateMs: 1000
+      }
+    }
+    window._downloadCalls = []
+    window.chrome = {
+      runtime: {
+        getURL: function (path) { return 'chrome-extension://test/' + path },
+        getManifest: function () { return { version: '1.0' } },
+        sendMessage: function (request) {
+          if (request && request.type === 'collectDownloadJson') {
+            // 模拟 downloader.js 的行为：把 payload 转成 ArrayBuffer 返回
+            const json = JSON.stringify(request.payload)
+            const buffer = new TextEncoder().encode(json)
+            return Promise.resolve({ ok: true, arrayBuffer: buffer.buffer, filename: request.filename })
+          }
+          return Promise.resolve({})
+        },
+        onMessage: { addListener: function () {} }
+      },
+      storage: {
+        session: {
+          get: function () { return Promise.resolve({}) },
+          set: function () { return Promise.resolve({}) }
+        }
+      },
+      webRequest: {
+        onCompleted: { addListener: function () {} }
+      },
+      tabs: {
+        onRemoved: { addListener: function () {} },
+        onUpdated: { addListener: function () {} },
+        get: function () { return Promise.resolve({ url: '', title: '' }) },
+        sendMessage: function () { return Promise.resolve({}) }
+      },
+      offscreen: {
+        createDocument: function () { return Promise.resolve() }
+      },
+      downloads: {
+        download: function (options) {
+          window._downloadCalls.push(options)
+          return Promise.resolve(1)
+        }
+      }
+    }
+  </script>
+  <script src="../background/collectService.js"></script>
+  <script src="collectService.test.js"></script>
+</body>
+</html>

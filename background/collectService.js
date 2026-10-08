@@ -188,26 +188,121 @@ const CollectService = {
     return this.flattenGroupTree(tree.roots, nameMap)
   },
 
+  /**
+   * 将动作列表按 group 路径构建成录制同款的层级结构。
+   *
+   * 关键行为：
+   *   1. 弹窗类分组（type === 'dialog'）不再跨非连续动作复用；每次“进入”弹窗都创建新实例。
+   *   2. 当一条动作之后紧接着出现了不在当前路径中的弹窗时，认为该弹窗由这条动作触发，
+   *      模拟录制模式的 anchorTarget 效果，把弹窗分组挂到触发动作所在的父分组下，
+   *      并紧跟在触发动作之后。
+   *   3. 同一弹窗被多次打开时，每一次打开都会生成独立子分组，避免后发生的弹窗内容
+   *      被塞到第一次打开的弹窗实例里、导致时间顺序错乱。
+   */
   buildGroupTree(actions) {
     const roots = []
     const nodeMap = new Map()
     const DEFAULT_PAGE_KEY = '__collect_default_page__'
+
+    const pageGroup = {
+      type: 'page',
+      propertiesName: '主页面',
+      key: DEFAULT_PAGE_KEY,
+      url: '',
+      fixedKey: true
+    }
+
+    let defaultPageNode = null
+    let effectivePath = []
+    let stack = []
+
+    function sameGroup(a, b) {
+      return (a.type || '') === (b.type || '') && (a.key || a.propertiesName) === (b.key || b.propertiesName)
+    }
+
+    function commonPrefixLength(a, b) {
+      let len = 0
+      while (len < a.length && len < b.length && sameGroup(a[len], b[len])) len++
+      return len
+    }
+
+    function groupInPath(group, path) {
+      return path.some(g => sameGroup(g, group))
+    }
 
     for (const action of actions || []) {
       const path = Array.isArray(action.group)
         ? action.group.filter(g => g && (g.key || g.propertiesName))
         : []
 
-      let parentKey = ''
-      let parentEntries = roots
-      let deepestNode = null
+      let displayPath = path
 
-      for (let i = 0; i < path.length; i++) {
-        const g = path[i]
-        const nodeKey = (parentKey ? parentKey + '|' : '') + (g.type || 'group') + ':' + (g.key || g.propertiesName)
+      // 无分组信息时挂到当前上下文（保持时间顺序），没有任何上下文再用默认主页面兜底。
+      if (path.length === 0) {
+        const deepestNode = stack.length > 0 ? stack[stack.length - 1] : null
+        if (deepestNode) {
+          deepestNode.entries.push({ kind: 'action', action })
+        } else {
+          if (!defaultPageNode) {
+            defaultPageNode = {
+              _key: DEFAULT_PAGE_KEY,
+              type: 'page',
+              propertiesName: '主页面',
+              key: DEFAULT_PAGE_KEY,
+              url: '',
+              parentKey: null,
+              entries: []
+            }
+            nodeMap.set(DEFAULT_PAGE_KEY, defaultPageNode)
+            roots.push({ kind: 'group', node: defaultPageNode })
+          }
+          defaultPageNode.entries.push({ kind: 'action', action })
+        }
+        continue
+      }
+
+      // 推断当前动作在导出时应处的 displayPath。
+      if (effectivePath.length > 0) {
+        const currDeepest = path[path.length - 1]
+        const prevDeepest = effectivePath[effectivePath.length - 1]
+
+        if (sameGroup(currDeepest, prevDeepest)) {
+          // 与上一条动作处于同一最深分组，沿用已锚定的上下文。
+          displayPath = effectivePath
+        } else if (currDeepest.type === 'dialog' && !groupInPath(currDeepest, effectivePath)) {
+          // 新弹窗：挂到上一条动作所在路径之后（模拟 anchorTarget）。
+          const commonLen = commonPrefixLength(effectivePath, path)
+          if (commonLen >= 1) {
+            displayPath = effectivePath.concat(path.slice(commonLen))
+          }
+        }
+        // 其余情况使用原始 path。
+      }
+
+      // 按 displayPath 构建/复用分组节点。
+      let commonLength = 0
+      while (commonLength < effectivePath.length &&
+             commonLength < displayPath.length &&
+             sameGroup(effectivePath[commonLength], displayPath[commonLength])) {
+        commonLength++
+      }
+
+      // 回退到公共前缀所在节点。
+      stack = stack.slice(0, commonLength)
+
+      // 为新增的分组后缀逐级创建/复用节点。
+      // 弹窗类分组每次进入都创建独立实例；其它分组（页面/页签/折叠面板）按完整路径复用，
+      // 避免弹窗关闭后回到原分组时又生成 客户基本信息_1 / 基本信息_1 等重复分组。
+      for (let i = commonLength; i < displayPath.length; i++) {
+        const g = displayPath[i]
+        const parentKey = i > 0 ? (stack[i - 1]._key || '') : ''
+        const baseNodeKey = (parentKey ? parentKey + '|' : '') + (g.type || 'group') + ':' + (g.key || g.propertiesName)
+        const isDialog = g.type === 'dialog'
+        const nodeKey = isDialog ? baseNodeKey + '@@' + action.timestamp : baseNodeKey
 
         let node = nodeMap.get(nodeKey)
-        if (!node) {
+        let isNewNode = false
+        if (!node || isDialog) {
           node = {
             _key: nodeKey,
             type: g.type || 'group',
@@ -217,34 +312,27 @@ const CollectService = {
             parentKey: parentKey || null,
             entries: []
           }
-          nodeMap.set(nodeKey, node)
-          parentEntries.push({ kind: 'group', node })
-        }
-
-        deepestNode = node
-        parentKey = nodeKey
-        parentEntries = node.entries
-      }
-
-      if (!deepestNode) {
-        let node = nodeMap.get(DEFAULT_PAGE_KEY)
-        if (!node) {
-          node = {
-            _key: DEFAULT_PAGE_KEY,
-            type: 'page',
-            propertiesName: '主页面',
-            key: DEFAULT_PAGE_KEY,
-            url: '',
-            parentKey: null,
-            entries: []
+          if (!isDialog) {
+            nodeMap.set(nodeKey, node)
           }
-          nodeMap.set(DEFAULT_PAGE_KEY, node)
-          roots.push({ kind: 'group', node })
+          isNewNode = true
+          if (stack.length > 0) {
+            stack[stack.length - 1].entries.push({ kind: 'group', node })
+          } else {
+            roots.push({ kind: 'group', node })
+          }
         }
-        deepestNode = node
+
+        stack.push(node)
       }
 
-      deepestNode.entries.push({ kind: 'action', action })
+      // 将动作挂到最深处分组。
+      const deepestNode = stack[stack.length - 1]
+      if (deepestNode) {
+        deepestNode.entries.push({ kind: 'action', action })
+      }
+
+      effectivePath = displayPath
     }
 
     return { roots, nodeMap }
@@ -336,8 +424,19 @@ const CollectService = {
       filename
     })
     console.log('[CollectService] offscreen response', resp)
-    if (resp && !resp.ok) {
+    if (!resp || !resp.ok) {
       throw new Error(resp.error || 'offscreen download failed')
+    }
+
+    // 在 service worker 中重建 Blob 并触发下载（offscreen 无法访问 chrome.downloads）。
+    const blob = new Blob([resp.arrayBuffer], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    try {
+      await chrome.downloads.download({ url, filename, saveAs: false })
+      console.log('[CollectService] download started from service worker')
+    } finally {
+      // 下载已启动，30 秒后释放 blob URL。
+      setTimeout(() => URL.revokeObjectURL(url), 30000)
     }
   },
 
@@ -358,7 +457,7 @@ const CollectService = {
         await chrome.offscreen.createDocument({
           url: chrome.runtime.getURL(COLLECT_OFFSCREEN_DOC),
           reasons: ['BLOBS'],
-          justification: '生成采集 JSON 的 blob 并触发下载'
+          justification: '生成采集 JSON 的 blob 供 service worker 下载'
         })
         console.log('[CollectService] offscreen document created')
       } catch (e) {
