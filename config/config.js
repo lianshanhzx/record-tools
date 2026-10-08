@@ -25,7 +25,10 @@ var APP_DEFAULT_CONFIG = {
     // 普通点击后接口通常在几百毫秒内发出，默认 1000ms 兼顾慢网络，避免混入无关请求。
     networkAssociateMs: 1000,
     // 是否采集 iframe 中的操作。
-    captureIframes: true
+    captureIframes: true,
+  
+    // 采集结果上报地址为空时只下载本地 JSON，不触发上传。
+    telemetryHost: 'http://47.101.58.49:3000'
   }
 };
 

@@ -68,6 +68,7 @@ const Collector = {
         CollectOverlay.show()
       }
       this.reportPageConfig()
+      this.reportPagetagName()
     }
   },
 
@@ -117,6 +118,26 @@ const Collector = {
     window.addEventListener('pagehide', () => {
       finalize(this.scanPageConfig())
     }, { once: true })
+  },
+
+  /**
+   * 上报采集开始时顶部 tags-view 中激活页签的名称（pagetagName）。
+   */
+  reportPagetagName() {
+    const name = this.scanPagetagName()
+    if (!name) return
+    console.log('[Collector] pagetagName', name)
+    chrome.runtime.sendMessage({ type: 'collectPagetagName', pagetagName: name }).catch(() => {})
+  },
+
+  /**
+   * 扫描 tags-view 中当前激活页签的显示文本。
+   */
+  scanPagetagName() {
+    const activeItem = document.querySelector('.tags-view-wrapper > li.is-active')
+    if (!activeItem) return ''
+    const span = activeItem.querySelector('span')
+    return span ? (span.innerText || span.textContent || '').trim() : ''
   },
 
   /**

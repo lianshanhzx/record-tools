@@ -43,7 +43,8 @@ const CollectService = {
       networkRequests: raw.networkRequests || [],
       lastNetworkIndex: raw.lastNetworkIndex || 0,
       nextSeq: raw.nextSeq || 1,
-      pageConfig: raw.pageConfig === undefined ? null : raw.pageConfig
+      pageConfig: raw.pageConfig === undefined ? null : raw.pageConfig,
+      pagetagName: raw.pagetagName || ''
     }
   },
 
@@ -95,7 +96,8 @@ const CollectService = {
       networkRequests: [],
       lastNetworkIndex: 0,
       nextSeq: 1,
-      pageConfig: null
+      pageConfig: null,
+      pagetagName: ''
     }
     this.sessions.set(tabId, session)
     await this.persist()
@@ -114,24 +116,38 @@ const CollectService = {
     session.status = 'ending'
     session.endTime = Date.now()
     session.result = result
-    await this.finalize(session)
+    const finalizeResult = await this.finalize(session)
     this.sessions.delete(tabId)
     await this.persist()
-    return { downloaded: true, sessionId: session.sessionId }
+    return { downloaded: true, sessionId: session.sessionId, upload: finalizeResult.upload }
   },
 
   async finalize(session) {
     await this.init()
     console.log('[CollectService] finalize', session.sessionId, 'result=', session.result)
     const payload = this.buildPayload(session)
-    const filename = `${APP_DEFAULT_CONFIG.collect.downloadDirectory}/${this.formatDate(session.endTime || Date.now())}_${session.sessionId}.json`
+    const pageName = (session.pageConfig && session.pageConfig['页面名称']) || session.pagetagName || ''
+    const safePageName = this.sanitizeFileName(pageName)
+    const datePart = this.formatDate(session.endTime || Date.now())
+    const filename = safePageName
+      ? `${APP_DEFAULT_CONFIG.collect.downloadDirectory}/${safePageName}_${datePart}.json`
+      : `${APP_DEFAULT_CONFIG.collect.downloadDirectory}/${datePart}_${session.sessionId}.json`
+
+    // 上传与下载并行，上传失败不阻塞下载。
+    const uploadPromise = this.uploadJson(payload)
+
     try {
       await this.downloadJson(payload, filename)
       console.log('[CollectService] download triggered', filename)
     } catch (e) {
       console.error('[CollectService] download failed', e)
+      // 即使下载失败，也等待上传结果以便记录。
+      try { await uploadPromise } catch (_) {}
       throw e
     }
+
+    const uploadResult = await uploadPromise
+    return { downloaded: true, filename, upload: uploadResult }
   },
 
   buildPayload(session) {
@@ -173,6 +189,7 @@ const CollectService = {
         url: tabInfo.url || '',
         title: tabInfo.title || ''
       },
+      pagetagName: session.pagetagName || '',
       pageConfig: session.pageConfig || {},
       transcationProperties
     }
@@ -404,6 +421,11 @@ const CollectService = {
     return `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`
   },
 
+  sanitizeFileName(name) {
+    if (!name || typeof name !== 'string') return ''
+    return name.replace(/[\\/:*?"<>|]/g, '_').trim()
+  },
+
   async downloadJson(payload, filename) {
     try {
       console.log('[CollectService] try offscreen download')
@@ -447,6 +469,55 @@ const CollectService = {
     const url = 'data:application/json;base64,' + base64
     console.log('[CollectService] fallback download data url, size=', json.length)
     await chrome.downloads.download({ url, filename, saveAs: false })
+  },
+
+  /**
+   * 将采集结果 JSON 上传到 Telemetry 服务。
+   * 配置项：APP_DEFAULT_CONFIG.collect.telemetryHost
+   * 接口：POST /api/v2/telemetry/batches，无鉴权。
+   * 上传失败只记录日志，不抛异常，避免影响本地下载。
+   */
+  async uploadJson(payload) {
+    const host = String(
+      (APP_DEFAULT_CONFIG.collect && APP_DEFAULT_CONFIG.collect.telemetryHost) || ''
+    ).trim().replace(/\/+$/, '')
+    if (!host) {
+      console.log('[CollectService] telemetryHost not configured, skip upload')
+      return { skipped: true }
+    }
+
+    const url = host + '/api/v2/telemetry/batches'
+    const body = JSON.stringify(payload)
+    console.log('[CollectService] uploading to', url, 'size=', body.length)
+
+    try {
+      const controller = new AbortController()
+      const timeoutId = setTimeout(() => controller.abort(), 30000)
+
+      const resp = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: body,
+        signal: controller.signal
+      })
+
+      clearTimeout(timeoutId)
+
+      if (!resp.ok) {
+        // 尽量读取服务端返回的具体错误信息，方便排查 400。
+        let serverMsg = ''
+        try {
+          serverMsg = await resp.text()
+        } catch (_) {}
+        throw new Error('HTTP ' + resp.status + ' ' + resp.statusText + (serverMsg ? ' | ' + serverMsg.slice(0, 500) : ''))
+      }
+
+      console.log('[CollectService] upload success', resp.status)
+      return { uploaded: true, status: resp.status }
+    } catch (err) {
+      console.error('[CollectService] upload failed', err)
+      return { uploaded: false, error: err.message }
+    }
   },
 
   async ensureOffscreen() {
@@ -499,6 +570,16 @@ const CollectService = {
     session.pageConfig = pageConfig || {}
     await this.persist()
     return session.pageConfig
+  },
+
+  async setPagetagName(tabId, pagetagName) {
+    await this.init()
+    const session = this.getActiveSession(tabId)
+    if (!session) return null
+    if (session.pagetagName) return session.pagetagName
+    session.pagetagName = pagetagName || ''
+    await this.persist()
+    return session.pagetagName
   },
 
   async addNetworkRequest(details) {
@@ -594,6 +675,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     CollectService.init().then(() => {
       CollectService.setPageConfig(tabId, message.pageConfig).then(config => {
         sendResponse({ pageConfig: config })
+      })
+    })
+    return true
+  }
+
+  if (type === 'collectPagetagName') {
+    CollectService.init().then(() => {
+      CollectService.setPagetagName(tabId, message.pagetagName).then(name => {
+        sendResponse({ pagetagName: name })
       })
     })
     return true

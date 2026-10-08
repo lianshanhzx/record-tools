@@ -15,9 +15,9 @@
 2. 在目标网页点击扩展图标（`both` 模式下选择“采集工具”）
 3. 页面右上角出现红色“采集中”悬浮标记，即可开始正常操作被测系统
 4. 操作结束后点击标记上的“结束”，选择：
-   - **通过**：保存本次采集数据到 `collect/<时间戳>_<sessionId>.json`，`result` 为 `pass`
-   - **不通过**：同样保存数据，`result` 为 `fail`
-   - **废弃**：丢弃本次数据，不生成文件
+   - **通过**：保存本次采集数据到 `collect/<时间戳>_<sessionId>.json`，`result` 为 `pass`；如配置了 `collect.telemetryHost`，会同时上传到该服务
+   - **不通过**：同样保存数据并上传，`result` 为 `fail`
+   - **废弃**：丢弃本次数据，不生成文件，不上传
 
 悬浮标记说明：
 
@@ -93,8 +93,10 @@ Content (collect/overlay.js)
   ▼
 Background (collectService.js)
   │  CollectService.endCollect(tabId, result)
-  │    ├─ pass/fail：组装 JSON（`transcationProperties` 为扁平分组 + 操作节点，通过 `propertiesID`/`propertiesPID` 表达层级）→ 通过 offscreen document 下载到 collect/ 目录
-  │    └─ discard：清空会话，不下载
+  │    ├─ pass/fail：组装 JSON（`transcationProperties` 为扁平分组 + 操作节点，通过 `propertiesID`/`propertiesPID` 表达层级）
+  │    │    ├─ 通过 offscreen document 下载到 collect/ 目录
+  │    │    └─ 若配置了 `collect.telemetryHost`，并行 POST 到 `/api/v2/telemetry/batches`（无鉴权，失败不阻塞下载）
+  │    └─ discard：清空会话，不下载，不上传
   │  chrome.tabs.sendMessage(tabId, { type: 'collectStopped' })
   ▼
 Content
@@ -226,6 +228,23 @@ Content
 这与录制工具中通过 `anchorTarget` 实现的“弹窗紧跟触发按钮”效果保持一致。
 
 > 采集内容脚本会过滤掉弹窗包装器 / 遮罩层（如 `.el-dialog__wrapper`）上的点击，避免把同一弹窗的内容错误地切到两个分组里。
+
+### 上报配置
+
+在 `config/config.js` 中配置 `collect.telemetryHost` 可开启采集结果自动上报：
+
+```js
+collect: {
+  // ... 其他配置
+  telemetryHost: 'http://172.20.101.63:11002'  // 示例地址
+}
+```
+
+- 只填写 host + 端口，代码会自动拼接 `/api/v2/telemetry/batches`。
+- 为空字符串（默认）时只下载本地 JSON，不上传。
+- 仅 `pass` / `fail` 会上传；`discard` 和标签页关闭产生的 `interrupted` 不会上传。
+- 接口为 `POST`，`Content-Type: application/json`，请求体即为下载的 JSON 内容，无鉴权。
+- 上传与本地下载并行，上传失败仅记录日志，不影响文件下载。
 
 ### 其他说明
 

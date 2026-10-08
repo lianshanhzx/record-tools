@@ -4,11 +4,34 @@
   const results = document.getElementById('results')
   const summary = document.getElementById('summary')
   let passed = 0
+  let total = 0
+
+  function updateSummary() {
+    summary.textContent = passed + '/' + total + ' 通过'
+    summary.className = passed === total ? 'pass' : 'fail'
+    document.title = passed === total ? 'PASS - CollectService tests' : 'FAIL - CollectService tests'
+  }
 
   function run(name, test) {
+    total++
     const row = document.createElement('li')
+    results.appendChild(row)
     try {
-      test()
+      const maybePromise = test()
+      if (maybePromise && typeof maybePromise.then === 'function') {
+        maybePromise.then(() => {
+          row.className = 'pass'
+          row.textContent = 'PASS: ' + name
+          passed++
+          updateSummary()
+        }).catch(error => {
+          row.className = 'fail'
+          row.textContent = 'FAIL: ' + name + ' - ' + error.message
+          console.error(name, error)
+          updateSummary()
+        })
+        return
+      }
       row.className = 'pass'
       row.textContent = 'PASS: ' + name
       passed++
@@ -17,7 +40,7 @@
       row.textContent = 'FAIL: ' + name + ' - ' + error.message
       console.error(name, error)
     }
-    results.appendChild(row)
+    updateSummary()
   }
 
   function assert(condition, message) {
@@ -210,7 +233,46 @@
     assert(typeof call.url === 'string' && call.url.startsWith('blob:'), '应使用 blob URL 下载')
   })
 
-  summary.textContent = passed + '/8 通过'
-  summary.className = passed === 8 ? 'pass' : 'fail'
-  document.title = passed === 8 ? 'PASS - CollectService tests' : 'FAIL - CollectService tests'
+  run('telemetryHost 为空时跳过上传', async function () {
+    APP_DEFAULT_CONFIG.collect.telemetryHost = ''
+    const result = await CollectService.uploadJson({ id: 'test' })
+    assert(result.skipped === true, '应返回 skipped=true')
+  })
+
+  run('telemetryHost 配置后上传 JSON 到 /api/v2/telemetry/batches', async function () {
+    APP_DEFAULT_CONFIG.collect.telemetryHost = 'http://172.20.101.63:11002'
+    const calls = []
+    const originalFetch = window.fetch
+    window.fetch = async function (url, options) {
+      calls.push({ url: url, options: options })
+      return { ok: true, status: 200 }
+    }
+    try {
+      const payload = { id: 'test-upload', name: 'collect' }
+      const result = await CollectService.uploadJson(payload)
+      assert(result.uploaded === true, '应返回 uploaded=true')
+      assert(calls.length === 1, '应发起一次 fetch')
+      assert(calls[0].url === 'http://172.20.101.63:11002/api/v2/telemetry/batches', 'URL 应正确')
+      assert(calls[0].options.method === 'POST', '应使用 POST')
+      assert(calls[0].options.headers['Content-Type'] === 'application/json', 'Content-Type 应为 application/json')
+      assert(calls[0].options.body === JSON.stringify(payload), 'body 应为序列化后的 payload')
+    } finally {
+      window.fetch = originalFetch
+    }
+  })
+
+  run('上传接口非 2xx 时返回失败但不抛异常', async function () {
+    APP_DEFAULT_CONFIG.collect.telemetryHost = 'http://172.20.101.63:11002'
+    const originalFetch = window.fetch
+    window.fetch = async function () {
+      return { ok: false, status: 500, statusText: 'Internal Server Error' }
+    }
+    try {
+      const result = await CollectService.uploadJson({ id: 'test' })
+      assert(result.uploaded === false, '应返回 uploaded=false')
+      assert(result.error && result.error.includes('500'), 'error 应包含 HTTP 500')
+    } finally {
+      window.fetch = originalFetch
+    }
+  })
 })()
