@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <title>Collector tests</title>
+  <style>.pass { color: #18794e; } .fail { color: #b42318; }</style>
+</head>
+<body>
+  <p id="summary">运行中...</p>
+  <ol id="results"></ol>
+  <script>
+    window.APP_MODE = 'collect'
+    window.APP_DEFAULT_CONFIG = { collect: { attributesAllowlist: ['id', 'class', 'type', 'value'] } }
+    window.Utils = { getEventTypeName: function () { return '树形选择' } }
+    window.chrome = {
+      runtime: {
+        sendMessage: function (message) {
+          window._messages.push(message)
+          return Promise.resolve({})
+        },
+        onMessage: { addListener: function () {} }
+      }
+    }
+    window._messages = []
+  </script>
+  <script src="../content/treeSelectHandler.js"></script>
+  <script src="../collect/collector.js"></script>
+  <script src="collector.test.js"></script>
+</body>
+</html>

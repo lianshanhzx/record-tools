@@ -171,7 +171,7 @@ chrome.action.onClicked.addListener(async (tab) => {
       await ensureContentScriptsInjected(tab.id)
     }
     try {
-      await chrome.tabs.sendMessage(tab.id, { type: 'collectStarted', sessionId: result.sessionId })
+      await chrome.tabs.sendMessage(tab.id, { type: 'collectStarted', sessionId: result.sessionId, startTime: result.startTime })
     } catch (e2) {
       console.warn('[SW] send collectStarted failed', e2)
     }
@@ -301,7 +301,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         await ensureContentScriptsInjected(tabId)
       }
       try {
-        await chrome.tabs.sendMessage(tabId, { type: 'collectStarted', sessionId: result.sessionId })
+        await chrome.tabs.sendMessage(tabId, { type: 'collectStarted', sessionId: result.sessionId, startTime: result.startTime })
       } catch (e2) {
         console.warn('[SW] send collectStarted failed', e2)
       }

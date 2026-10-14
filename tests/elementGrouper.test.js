@@ -76,6 +76,22 @@
     assert(path[path.length - 1].propertiesName === '确认删除', '未保留最近提示框的名称');
   }));
 
+  testResults.push(run('重复 id 的抽屉各自取到自己的标题', function () {
+    fixtures.innerHTML =
+      '<div class="el-drawer__wrapper"><div class="el-drawer rtl" role="dialog" aria-modal="true" aria-labelledby="el-drawer__title" aria-label="消息列表">' +
+      '  <header class="el-drawer__header" id="el-drawer__title"><span role="heading">消息列表</span></header>' +
+      '  <section class="el-drawer__body"><button id="msgBtn">查看</button></section>' +
+      '</div></div>' +
+      '<div class="el-drawer__wrapper"><div class="el-drawer rtl" role="dialog" aria-modal="true" aria-labelledby="el-drawer__title" aria-label="新增客户校验">' +
+      '  <header class="el-drawer__header" id="el-drawer__title"><span role="heading">新增客户校验</span></header>' +
+      '  <section class="el-drawer__body"><button id="addBtn">保存</button></section>' +
+      '</div></div>';
+    const path = ElementGrouper.getGroupPath(fixtures.querySelector('#addBtn'));
+    const dialogGroup = path.filter(item => item.type === 'dialog').pop();
+    assert(dialogGroup, '未生成弹窗分组');
+    assert(dialogGroup.propertiesName === '新增客户校验', `实际名称为 ${dialogGroup.propertiesName}`);
+  }));
+
   fixtures.innerHTML = '';
   const passedCount = testResults.filter(Boolean).length;
   const passed = passedCount === testResults.length;

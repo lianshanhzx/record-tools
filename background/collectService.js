@@ -84,7 +84,7 @@ const CollectService = {
     // 同一个标签页如果已在采集中，先结束并保存为上一条（理论上不会触发）。
     const existing = this.sessions.get(tabId)
     if (existing && existing.status === 'collecting') {
-      return { sessionId: existing.sessionId, alreadyActive: true }
+      return { sessionId: existing.sessionId, startTime: existing.startTime, alreadyActive: true }
     }
 
     const session = {
@@ -101,7 +101,7 @@ const CollectService = {
     }
     this.sessions.set(tabId, session)
     await this.persist()
-    return { sessionId: session.sessionId, alreadyActive: false }
+    return { sessionId: session.sessionId, startTime: session.startTime, alreadyActive: false }
   },
 
   async endCollect(tabId, result) {
@@ -632,8 +632,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     console.log('[CollectService] collectInit from tab', tabId)
     CollectService.init().then(() => {
       const session = CollectService.getActiveSession(tabId)
-      console.log('[CollectService] collectInit response', { active: !!session, sessionId: session ? session.sessionId : null })
-      sendResponse({ active: !!session, sessionId: session ? session.sessionId : null })
+      console.log('[CollectService] collectInit response', { active: !!session, sessionId: session ? session.sessionId : null, startTime: session ? session.startTime : null })
+      sendResponse({ active: !!session, sessionId: session ? session.sessionId : null, startTime: session ? session.startTime : null })
     })
     return true
   }
@@ -645,7 +645,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       sendResponse(result)
       try {
         console.log('[CollectService] broadcast collectStarted to tab', tabId)
-        await chrome.tabs.sendMessage(tabId, { type: 'collectStarted', sessionId: result.sessionId })
+        await chrome.tabs.sendMessage(tabId, { type: 'collectStarted', sessionId: result.sessionId, startTime: result.startTime })
       } catch (e) {
         console.warn('[CollectService] broadcast collectStarted failed', e)
       }

@@ -115,6 +115,41 @@ const ElementGrouper = (function () {
     return (text || '').replace(/\s+/g, ' ').trim().slice(0, 30)
   }
 
+  /**
+   * 在指定根节点内按 id 查找元素。
+   * 不用 querySelector('#id')，避免 id 含特殊字符导致选择器报错。
+   * @param {Element} root 查找范围（容器节点）
+   * @param {string} id 目标 id
+   * @returns {Element|null} 命中元素；未命中返回 null
+   */
+  function queryByIdWithin(root, id) {
+    if (!root || !id || typeof root.querySelectorAll !== 'function') return null
+    const candidates = root.querySelectorAll('[id]')
+    for (const el of candidates) {
+      if (el.getAttribute('id') === id) return el
+    }
+    return null
+  }
+
+  /**
+   * 全局按 id 查找元素，仅当该 id 在文档中唯一时返回。
+   * Element UI 的抽屉标题固定写作 id="el-drawer__title"，多个抽屉并存时 id 会重复，
+   * 此时全局 getElementById 只会命中 DOM 中最早的那个容器，必须视为不可信。
+   * @param {string} id 目标 id
+   * @returns {Element|null} 唯一命中元素；无命中或 id 重复时返回 null
+   */
+  function queryUniqueId(id) {
+    if (!id) return null
+    let found = null
+    const candidates = document.querySelectorAll('[id]')
+    for (const el of candidates) {
+      if (el.getAttribute('id') !== id) continue
+      if (found) return null
+      found = el
+    }
+    return found
+  }
+
   // ==================== 分组路径计算（content 侧） ====================
 
   /**
@@ -138,12 +173,16 @@ const ElementGrouper = (function () {
 
   /**
    * 解析弹窗/抽屉容器的显示名。
-   * 优先级：aria-labelledby 引用元素 > 常见标题选择器 > aria-label > '弹窗'
+   * 优先级：aria-labelledby 引用元素（容器内优先） > 常见标题选择器 > aria-label > '弹窗'
+   *
+   * aria-labelledby 的查找必须优先限定在容器内部：Element UI 的抽屉标题固定写作
+   * id="el-drawer__title"，多个抽屉并存时会重复，全局 getElementById 会命中最前面的
+   * 那个抽屉，导致名称串到别的窗口。容器内找不到时，仅在 id 全局唯一时才使用全局命中。
    */
   function resolveDialogName(dialog) {
     const labelledBy = dialog.getAttribute('aria-labelledby')
     if (labelledBy) {
-      const titleEl = document.getElementById(labelledBy)
+      const titleEl = queryByIdWithin(dialog, labelledBy) || queryUniqueId(labelledBy)
       const text = cleanText(titleEl && titleEl.innerText)
       if (text) return text
     }
@@ -167,13 +206,20 @@ const ElementGrouper = (function () {
 
   /**
    * 解析 Tab 页签面板的显示名。
-   * 优先级：aria-labelledby 引用页签头 > 所属 tabs 容器中 aria-controls 反查 > label 属性 > '页签'
+   * 优先级：aria-labelledby 引用页签头（所属 tabs 容器内优先） > 所属 tabs 容器中
+   * aria-controls 反查 > label 属性 > '页签'
+   *
+   * 页签头位于 pane 之外、tabs 容器之内，因此 id 查找先限定在所属 tabs 容器范围，
+   * 避免重复 id 跨容器串名；容器内找不到时仅在 id 全局唯一时才使用全局命中。
    */
   function resolveTabName(pane) {
+    const tabs = typeof pane.closest === 'function' ? pane.closest('.el-tabs, .tabs') : null
+    const scope = tabs || pane
+
     // 1. aria-labelledby → 对应页签头文本（标准 ARIA 结构，部分框架使用真实 id）
     const labelledBy = pane.getAttribute('aria-labelledby')
     if (labelledBy) {
-      const tabItem = document.getElementById(labelledBy)
+      const tabItem = queryByIdWithin(scope, labelledBy) || queryUniqueId(labelledBy)
       const text = cleanText(tabItem && tabItem.innerText)
       if (text) return text
     }
@@ -182,12 +228,12 @@ const ElementGrouper = (function () {
     //    而 aria-labelledby 的值是逻辑引用（如 "tab-客户基本信息"），不能用 getElementById 直接定位。
     const tabId = pane.getAttribute('tab-id') || pane.id
     if (tabId) {
-      const tabItem = document.getElementById('tab-' + tabId)
+      const headId = 'tab-' + tabId
+      const tabItem = queryByIdWithin(scope, headId) || queryUniqueId(headId)
       const text = cleanText(tabItem && tabItem.innerText)
       if (text) return text
     }
     // 3. 在所属 tabs 容器中通过 aria-controls 反查页签头（其他 UI 框架可能使用此映射）
-    const tabs = typeof pane.closest === 'function' ? pane.closest('.el-tabs, .tabs') : null
     if (tabs && pane.id) {
       try {
         const item = tabs.querySelector(

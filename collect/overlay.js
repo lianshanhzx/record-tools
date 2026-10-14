@@ -103,11 +103,12 @@ const CollectOverlay = {
     .ty-collect-btn.discard { background: #5f6368; }
   `,
 
-  show() {
+  show(startTime) {
+    const effectiveStart = Number.isFinite(startTime) && startTime > 0 ? startTime : Date.now()
     if (this.hostElement) {
       this.hostElement.style.display = 'block'
       this.showEnd()
-      this.startTime = Date.now()
+      this.startTime = effectiveStart
       this.startTimer()
       return
     }
@@ -138,7 +139,7 @@ const CollectOverlay = {
     document.documentElement.appendChild(this.hostElement)
 
     this.bindEvents(card)
-    this.startTime = Date.now()
+    this.startTime = effectiveStart
     this.startTimer()
   },
 

@@ -20,6 +20,9 @@ const Collector = {
   _clickHandler: null,
   _frameUrl: location.href,
   _lastAction: null,
+  // 采集模式独立维护树选择候选状态。不能复用 TreeSelectHandler.pendingTreeSelect，
+  // 后者会在完成时写入 Recorder 并向录制 popup 上报动作。
+  _pendingTreeSelect: null,
 
   async init() {
     // record 模式下完全不启用采集逻辑，避免任何副作用。
@@ -44,19 +47,19 @@ const Collector = {
       const resp = await chrome.runtime.sendMessage({ type: 'collectInit' })
       console.log('[Collector] collectInit response', resp)
       if (resp && resp.active && resp.sessionId) {
-        this.start(resp.sessionId)
+        this.start(resp.sessionId, resp.startTime)
       }
     } catch (e) {
       console.warn('[Collector] collectInit failed', e)
     }
   },
 
-  start(sessionId) {
+  start(sessionId, startTime) {
     if (this._collecting) {
       console.log('[Collector] already collecting')
       return
     }
-    console.log('[Collector] start', sessionId)
+    console.log('[Collector] start', sessionId, startTime)
     this._collecting = true
     this._sessionId = sessionId
     this._doc = document
@@ -65,7 +68,7 @@ const Collector = {
     if (window === window.top) {
       if (typeof CollectOverlay !== 'undefined') {
         console.log('[Collector] show overlay')
-        CollectOverlay.show()
+        CollectOverlay.show(startTime)
       }
       this.reportPageConfig()
       this.reportPagetagName()
@@ -75,6 +78,7 @@ const Collector = {
   stopLocal() {
     if (!this._collecting) return
     this.detachListeners()
+    this.clearPendingTreeSelect()
     this._collecting = false
     if (window === window.top && typeof CollectOverlay !== 'undefined') {
       CollectOverlay.hide()
@@ -234,6 +238,9 @@ const Collector = {
     if (this.shouldIgnoreEvent(event)) return
 
     const { target } = event
+    this.clearExpiredTreeSelect()
+    // 树形选择弹窗中的查询输入等 change 不应成为独立采集步骤。
+    if (this.isInPendingTreePopup(target)) return
     if (TreeSelectHandler && TreeSelectHandler.shouldIgnoreTreeChange && TreeSelectHandler.shouldIgnoreTreeChange(target)) {
       return
     }
@@ -265,6 +272,7 @@ const Collector = {
     if (this.shouldIgnoreEvent(event)) return
 
     const { target } = event
+    this.clearExpiredTreeSelect()
 
     // 忽略弹窗包装器/遮罩层的点击，避免把弹窗内容切到两个分组。
     if (this.isDialogWrapperElement(target)) return
@@ -273,11 +281,15 @@ const Collector = {
       TreeSelectHandler.clearExpiredTreeSelect && TreeSelectHandler.clearExpiredTreeSelect()
       const treeNodeEle = TreeSelectHandler.getTreeNodeElement && TreeSelectHandler.getTreeNodeElement(target)
       if (treeNodeEle) {
-        // 采集模式不调用 TreeSelectHandler.handleTreeNodeClick，避免其向 popup 发 addActionData。
+        if (this._pendingTreeSelect && this.isInPendingTreePopup(treeNodeEle)) {
+          this.completeTreeSelect(treeNodeEle)
+          return
+        }
+        // 非树选择器入口打开的普通树，保持原有点击采集行为。
         this.recordAction(treeNodeEle, 'click', '点击')
         return
       }
-      if (TreeSelectHandler.pendingTreeSelect && TreeSelectHandler.isInTreePopup && TreeSelectHandler.isInTreePopup(target)) {
+      if (this.isInPendingTreePopup(target)) {
         return
       }
     }
@@ -339,7 +351,8 @@ const Collector = {
     if (typeof TreeSelectHandler !== 'undefined' && TreeSelectHandler.getTreeTriggerInput) {
       const treeInputEle = TreeSelectHandler.getTreeTriggerInput(target)
       if (treeInputEle) {
-        this.recordAction(treeInputEle, 'click', '点击')
+        const action = this.recordAction(treeInputEle, 'click', '点击')
+        this.startTreeSelectCandidate(treeInputEle, action)
         return
       }
     }
@@ -429,6 +442,115 @@ const Collector = {
     return ''
   },
 
+  /**
+   * 记录树选择入口。候选动作保留入口自身的 group，最终只更新这条动作，
+   * 从而避免 Element UI 将 popover 挂到 body 后导致节点脱离原表单层级。
+   */
+  startTreeSelectCandidate(inputElement, action) {
+    if (!inputElement || !action) return
+    this.clearPendingTreeSelect()
+    this._pendingTreeSelect = {
+      inputElement,
+      action,
+      reportPromise: action._reportPromise || Promise.resolve(),
+      popupIds: this.getTreePopupIds(inputElement),
+      valueBefore: inputElement.value || '',
+      timestamp: Date.now(),
+      finalizing: false
+    }
+  },
+
+  clearPendingTreeSelect() {
+    this._pendingTreeSelect = null
+  },
+
+  clearExpiredTreeSelect() {
+    const pending = this._pendingTreeSelect
+    if (pending && Date.now() - pending.timestamp > 15000) {
+      this.clearPendingTreeSelect()
+    }
+  },
+
+  /** 获取入口通过 aria-* 关联的 tree popover id。 */
+  getTreePopupIds(inputElement) {
+    const ids = []
+    let node = inputElement
+    while (node && node !== document.documentElement) {
+      ;['aria-controls', 'aria-owns', 'aria-describedby'].forEach(attribute => {
+        const value = node.getAttribute && node.getAttribute(attribute)
+        if (value) value.split(/\s+/).filter(Boolean).forEach(id => ids.push(id))
+      })
+      if (node.classList && node.classList.contains('el-form-item')) break
+      node = node.parentElement
+    }
+    return Array.from(new Set(ids))
+  },
+
+  /** 判断元素是否处于当前候选入口对应的树形浮层内。 */
+  isInPendingTreePopup(element) {
+    const pending = this._pendingTreeSelect
+    if (!pending || !element || !element.closest) return false
+    const popup = element.closest('.el-popover, .el-popper, .el-dialog, .ant-tree-select-dropdown, .ant-select-dropdown, .ivu-select-dropdown, .t-popup, .t-dialog')
+    if (!popup) return false
+    const hasTree = !!popup.querySelector('.el-tree, [role="tree"], .ant-tree, .ivu-tree, .t-tree')
+    if (!hasTree) return false
+    if (pending.popupIds.length > 0) return pending.popupIds.includes(popup.id)
+    // 没有 aria 关联信息时，仅接受常见树选择浮层，避免把普通 dialog 中的树误并入。
+    return popup.classList.contains('tree-popover') || !!popup.querySelector('.tsscTree, .el-tree-select')
+  },
+
+  /**
+   * 树节点点击只用于完成入口候选动作，节点展开过程不另行上报。
+   */
+  completeTreeSelect(treeNode) {
+    const pending = this._pendingTreeSelect
+    if (!pending || pending.finalizing) return
+    pending.timestamp = Date.now()
+    pending.finalizing = true
+    const selectedText = TreeSelectHandler.getTreeNodeText
+      ? TreeSelectHandler.getTreeNodeText(treeNode)
+      : (treeNode.innerText || '').trim()
+    const isLeaf = TreeSelectHandler.isTreeLeafNode && TreeSelectHandler.isTreeLeafNode(treeNode)
+
+    // 捕获阶段早于组件将选中值写回入口 input，延迟一个事件循环后读取最终值。
+    setTimeout(() => {
+      if (this._pendingTreeSelect !== pending) return
+      const finalValue = (pending.inputElement.value || '').trim()
+      const popupClosed = !TreeSelectHandler.hasVisibleTreePopup || !TreeSelectHandler.hasVisibleTreePopup()
+      if (!isLeaf && !popupClosed) {
+        pending.finalizing = false
+        return
+      }
+      if (!finalValue && !selectedText) {
+        pending.finalizing = false
+        return
+      }
+
+      const action = pending.action
+      action.eventTypeValue = 'select:tree'
+      action.eventTypeName = typeof Utils !== 'undefined' && Utils.getEventTypeName
+        ? Utils.getEventTypeName('select:tree')
+        : '树形选择'
+      action.objectValue = finalValue || selectedText
+      if (action.attributes) action.attributes.value = action.objectValue
+
+      // 确保入口 collectAction 已由 background 入库后，再按 clientId 原地更新。
+      Promise.resolve(pending.reportPromise).catch(() => {}).then(() => {
+        return chrome.runtime.sendMessage({
+          type: 'collectActionUpdate',
+          clientId: action.clientId,
+          updates: {
+            eventTypeValue: action.eventTypeValue,
+            eventTypeName: action.eventTypeName,
+            objectValue: action.objectValue,
+            attributes: action.attributes
+          }
+        })
+      }).catch(() => {})
+      this.clearPendingTreeSelect()
+    }, 150)
+  },
+
   recordAction(element, eventType, eventTypeName, objectValueOverride) {
     if (!element || !this._collecting) return
 
@@ -477,12 +599,15 @@ const Collector = {
     }
 
     // 即时上报 background，页面跳转也不会丢。
-    chrome.runtime.sendMessage({
+    const reportPromise = chrome.runtime.sendMessage({
       type: 'collectAction',
       action: action
     }).catch(() => {})
+    // 仅供同一次页面内的延迟更新使用；不会通过消息或导出序列化。
+    Object.defineProperty(action, '_reportPromise', { value: reportPromise, enumerable: false })
 
     this._lastAction = action
+    return action
   },
 
   /**
@@ -581,8 +706,8 @@ const Collector = {
 if (typeof APP_MODE === 'undefined' || APP_MODE !== 'record') {
   chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (request.type === 'collectStarted') {
-      console.log('[Collector] receive collectStarted', request.sessionId)
-      Collector.start(request.sessionId)
+      console.log('[Collector] receive collectStarted', request.sessionId, request.startTime)
+      Collector.start(request.sessionId, request.startTime)
       sendResponse({ started: true })
       return false
     }
