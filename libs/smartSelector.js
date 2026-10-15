@@ -98,6 +98,8 @@ function isStableClassName(className) {
  *     而稳定业务编号最多小幅扣分。
  * 各分支正则含义：
  *   - el-id-* / el-collapse-content-*：Element UI 自动生成的 DOM id
+ *   - tree + 10~12位随机字母数字混合串（总长 14~16 位，如 tree1gef1hc4hgy / treeyrwyu4riez / treexeafq3hbwz）：
+ *     封装树形组件随机生成的 DOM id，按严格长度区间与字符混合特征排除，避免误伤业务普通 id（如 tree、treeNode、tree-select、tree1 等）
  *   - 标准 UUID 形态
  *   - 13 位数字：常见毫秒时间戳
  *   - 16 位以上字母+数字混合：大概率是随机 hash 或会话 token
@@ -108,6 +110,9 @@ function dynamicValuePenalty(value) {
   let penalty = 0;
   if (!text) return 100;
   if (/^el-id-/i.test(text) || /^el-collapse-content-\d+$/i.test(text)) penalty += 90;
+  // 树选择组件生成的随机 ID 特征：固定前缀 "tree" + 10~12 位随机字母数字串（如 tree1gef1hc4hgy, treeyrwyu4riez, treexeafq3hbwz）。
+  // 限定后缀长度在 10~12 位且含数字/随机字符混合，防止误伤普通业务命名（如 tree, treeContainer, tree_menu 等）。
+  if (/^tree[a-z0-9]{10,12}$/i.test(text)) penalty += 90;
   if (/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(text)) penalty += 90;
   if (/\b1\d{12}\b/.test(text)) penalty += 80;
   if (/[a-z0-9]{16,}$/i.test(text) && /[a-z]/i.test(text) && /\d/.test(text)) penalty += 55;
@@ -203,6 +208,7 @@ class SmartSelector {
   collectCandidates() {
     this.collectDirectAttributeCandidates();   // 目标自身属性/ID
     this.collectLabelCandidates();             // label[for] / 包裹 label / Element UI form-item
+    this.collectTableCellLabelCandidates();    // 表格前置单元格标签
     this.collectTextCandidates();              // 按钮/链接/菜单等精确文本
     this.collectTableRowCandidates();          // 表格行内重复按钮消歧
     this.collectSiblingCandidates();           // 前置 label/文本兄弟
@@ -343,6 +349,31 @@ class SmartSelector {
     for (const leaf of this.getFormLeafCandidates()) {
       this.addCandidate(`${compactPrefix}//${leaf.xpath}`, 'element_ui_form_label', leaf.score + 1, { scope: 'form_item' });
       this.addCandidate(`${fallbackPrefix}//${leaf.xpath}`, 'element_ui_form_label_fallback', leaf.score, { scope: 'form_item' });
+    }
+  }
+
+  /**
+   * 表格字段标签候选。表单式表格通常将字段名置于控件单元格的紧邻前一列，
+   * 例如 <td>客户名称：</td><td><input></td>。仅使用相邻单元格，避免将同行
+   * 其他业务数据误认为字段标签。
+   */
+  collectTableCellLabelCandidates() {
+    const tagName = this.element.tagName.toLowerCase();
+    if (!['input', 'textarea', 'select'].includes(tagName)) return;
+
+    const cell = this.element.closest('td, th');
+    const labelCell = cell && cell.previousElementSibling;
+    if (!labelCell || !/^(TD|TH)$/.test(labelCell.tagName)) return;
+
+    const text = normalizeFormLabel(labelCell.innerText || labelCell.textContent);
+    if (!text) return;
+
+    const labelTag = labelCell.tagName.toLowerCase();
+    const labelPredicate = this.formLabelPredicate(text);
+    const cellTag = cell.tagName.toLowerCase();
+    const prefix = `//${labelTag}[${labelPredicate}]/following-sibling::${cellTag}[1]`;
+    for (const leaf of this.getFormLeafCandidates()) {
+      this.addCandidate(`${prefix}//${leaf.xpath}`, 'table_cell_label', leaf.score, { scope: 'table_cell' });
     }
   }
 

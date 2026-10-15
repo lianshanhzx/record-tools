@@ -42,6 +42,20 @@
     assert(getRealLabelByElement(fixtures.querySelector('input')) === '客户等级', '未向上读取表单项标签')
   }))
 
+  testResults.push(run('读取表格前一单元格标签', function () {
+    fixtures.innerHTML = '<table><tbody><tr><td><div class="cell">资产负债率：</div></td><td><div class="cell"><input></div></td></tr></tbody></table>'
+    const input = fixtures.querySelector('input')
+    assert(getChineseLabelByElement(input) === '资产负债率：', '未读取表格字段业务名称')
+    assert(getRealLabelByElement(input) === '资产负债率：', '未读取表格字段真实标签')
+  }))
+
+  testResults.push(run('读取表格内 Element UI 下拉框标签', function () {
+    fixtures.innerHTML = '<table><tbody><tr><td>业务往来及使用</td><td><div class="el-select"><input class="el-input__inner" placeholder="请选择"></div></td></tr></tbody></table>'
+    const input = fixtures.querySelector('input')
+    assert(getChineseLabelByElement(input) === '业务往来及使用', '未读取下拉框表格字段标签')
+    assert(getRealLabelByElement(input) === '业务往来及使用', '下拉框真实标签错误')
+  }))
+
   testResults.push(run('真实标签不拼接按钮文本', function () {
     fixtures.innerHTML = '<div class="el-form-item"><label>客户管理</label><div><button>新增</button></div></div>'
     const button = fixtures.querySelector('button')

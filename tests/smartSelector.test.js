@@ -98,6 +98,19 @@
     assert(result.xpath.indexOf('el-form-item') !== -1, '特殊嵌套结构应保留 form-item 稳健回退');
   });
 
+  test('表格字段使用前一单元格标签定位', function () {
+    mount('<table><tbody><tr><td><div class="cell">资产负债率：</div></td><td><div class="cell"><input></div></td></tr></tbody></table>');
+    const result = assertSelector(fixtures.querySelector('input'), 'table_cell_label');
+    assert(result.xpath.indexOf('资产负债率') !== -1, 'XPath 未使用表格字段标签');
+    assert(result.xpath.indexOf('following-sibling::td[1]') !== -1, 'XPath 未限定紧邻控件单元格');
+  });
+
+  test('表格内 Element UI 下拉框使用字段标签定位', function () {
+    mount('<table><tbody><tr><td>业务往来及使用</td><td><div class="el-select"><input class="el-input__inner"></div></td></tr></tbody></table>');
+    const result = assertSelector(fixtures.querySelector('input'), 'table_cell_label');
+    assert(result.xpath.indexOf('业务往来及使用') !== -1, 'XPath 未使用下拉框字段标签');
+  });
+
   test('class 使用完整 token 匹配', function () {
     mount('<button class="btn">目标</button><button class="btn-group">其他</button>');
     const result = assertSelector(fixtures.querySelector('.btn'));
@@ -336,6 +349,27 @@
     shadowRoot.innerHTML = '<button data-shadow-test="yes">保存</button>';
     const matches = getElementsByXPathWithShadow("//*[@data-shadow-test='yes']");
     assert(matches.length === 0, '普通 XPath 不应被误报为可穿透 ShadowRoot');
+  });
+
+  test('tree 开头的随机 ID 不作为 stable_id 导出', function () {
+    mount(
+      '<div class="el-form-item">' +
+      '  <label class="el-form-item__label">行业代码</label>' +
+      '  <div><input id="tree1gef1hc4hgy" placeholder="请选择"></div>' +
+      '</div>'
+    );
+    const input = fixtures.querySelector('#tree1gef1hc4hgy');
+    const result = assertSelector(input);
+    assert(result.strategy !== 'stable_id', `tree 随机 ID 不应被识别为 stable_id，实际为 ${result.strategy}`);
+    assert(result.xpath.indexOf('tree1gef1hc4hgy') === -1, `XPath 不应包含随机 ID: ${result.xpath}`);
+    assert(result.xpath.indexOf('行业代码') !== -1, `XPath 应退回表单 label 定位: ${result.xpath}`);
+  });
+
+  test('普通带有 tree 语义的正常 ID 不被误杀', function () {
+    mount('<input id="treeNode" name="treeField">');
+    const input = fixtures.querySelector('#treeNode');
+    const result = assertSelector(input, 'stable_id');
+    assert(result.xpath === "//*[@id='treeNode']", '常规业务语义的 tree id 应保留正常识别');
   });
 
   let passed = 0;

@@ -77,6 +77,16 @@ function getWrappingLabel(element, appendButtonName = true) {
 
 }
 
+// 表格字段常把标签放在控件单元格的紧邻前一列。
+function getPreviousTableCellLabel(element) {
+  if (!element || !element.closest) return null
+  const cell = element.closest('td, th')
+  const labelCell = cell && cell.previousElementSibling
+  if (!labelCell || !/^(TD|TH)$/.test(labelCell.tagName)) return null
+  const text = (labelCell.innerText || labelCell.textContent || '').replace(/\s+/g, ' ').trim()
+  return text || null
+}
+
 
 //ARIA属性检查
 function getAriaLabel(element) {
@@ -124,6 +134,7 @@ function getRealLabelByElement(element) {
     const strategies = [
       () => getLabelByFor(element),
       () => getWrappingLabel(element, false),
+      () => getPreviousTableCellLabel(element),
       () => getAriaLabel(element),
        () => getAttributeLabel(element),
        () => getTooltipLabel(element),
@@ -276,6 +287,8 @@ function getChineseLabelByElement(element) {
       () => getLabelByFor(element),
       // 包裹的label
       () => getWrappingLabel(element),
+      // 表格中控件单元格紧邻前一列的标签
+      () => getPreviousTableCellLabel(element),
       // ARIA标签
       () => getAriaLabel(element),
        // 标题属性

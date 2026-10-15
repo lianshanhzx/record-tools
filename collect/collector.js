@@ -87,13 +87,15 @@ const Collector = {
 
   /**
    * 上报开始采集页面中的「天元相关配置」弹窗内容（每个会话只上报一次，由后台首次写入为准）。
-   * 弹窗可能晚于页面渲染出现，短轮询等待（最长约 3 秒）；页面跳转让位前若仍未抓到则按当前结果收尾。
+   * 若初始未扫描到，则尝试主动触发页面悬浮问号按钮打开弹窗，读取配置后再自动关闭。
+   * 页面跳转让位前若仍未抓到则按当前结果收尾。
    */
   reportPageConfig() {
-    const maxAttempts = 5
+    const maxAttempts = 6
     const intervalMs = 300
     let attempts = 0
     let sent = false
+    let triggerAttempted = false
 
     const finalize = (config) => {
       if (sent) return
@@ -106,9 +108,24 @@ const Collector = {
       const config = this.scanPageConfig()
       if (Object.keys(config).length > 0) {
         finalize(config)
+        // 如果是通过主动点击触发打开的弹窗，采集完后自动关闭弹窗
+        if (triggerAttempted) {
+          const dialog = this.findTianyuanDialog()
+          if (dialog) this.closeTianyuanDialog(dialog)
+        }
         return
       }
+
       attempts++
+      // 如果扫描2次（约600ms）仍未找到配置弹窗，且未触发过，则尝试主动点击悬浮按钮触发打开
+      if (attempts >= 2 && !triggerAttempted) {
+        triggerAttempted = true
+        const triggered = this.triggerTianyuanDialog()
+        if (triggered) {
+          console.log('[Collector] 未扫描到天元配置，已主动触发悬浮按钮')
+        }
+      }
+
       if (attempts >= maxAttempts) {
         finalize({})
         return
@@ -122,6 +139,61 @@ const Collector = {
     window.addEventListener('pagehide', () => {
       finalize(this.scanPageConfig())
     }, { once: true })
+  },
+
+  /**
+   * 查找页面天元弹窗触发按钮（通常是 class="floatingAction" 且包含 el-icon-question 图标）。
+   */
+  findTianyuanTriggerButton() {
+    const actionBtn = document.querySelector('.floatingAction')
+    if (actionBtn) return actionBtn
+    const icon = document.querySelector('.el-icon-question')
+    if (icon && icon.closest) {
+      return icon.closest('.floatingAction') || icon
+    }
+    return null
+  },
+
+  /**
+   * 主动触发天元弹窗。
+   */
+  triggerTianyuanDialog() {
+    const btn = this.findTianyuanTriggerButton()
+    if (!btn) return false
+    try {
+      btn.click()
+      return true
+    } catch (e) {
+      console.warn('[Collector] 触发天元弹窗失败:', e)
+      return false
+    }
+  },
+
+  /**
+   * 自动关闭天元弹窗，恢复页面初始状态。
+   */
+  closeTianyuanDialog(dialog) {
+    if (!dialog) return
+    try {
+      const closeBtn = dialog.querySelector(
+        '.el-dialog__headerbtn, .el-dialog__close, button[aria-label="Close"], button[aria-label="关闭"]'
+      )
+      if (closeBtn && typeof closeBtn.click === 'function') {
+        closeBtn.click()
+      } else {
+        // 如果未找到右上角关闭按钮，尝试遮罩层或者底部关闭/取消按钮
+        const footerBtns = dialog.querySelectorAll('.el-dialog__footer button, button')
+        for (const btn of footerBtns) {
+          const text = (btn.innerText || btn.textContent || '').trim()
+          if (text === '关闭' || text === '取消') {
+            btn.click()
+            break
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('[Collector] 自动关闭天元弹窗失败:', e)
+    }
   },
 
   /**
