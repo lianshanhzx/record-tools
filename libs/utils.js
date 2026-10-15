@@ -60,6 +60,28 @@ function getEventTypeName(value) {
   }
 }
 
+/**
+ * 从页面提取天元路由 resPath（hash 模式）。
+ */
+function getTianyuanResPath(hashString) {
+  const hash = hashString || (typeof window !== 'undefined' && window.location ? window.location.hash : '') || ''
+  if (!hash.startsWith('#/')) return ''
+  const pathWithoutHash = hash.slice(1)
+  return pathWithoutHash.split('?')[0]
+}
+
+/**
+ * 从天元组件字符串（例如 "新增对公客户评级-主办客户经理发起对公客户评级申请组件(ZJJK00109206),征信信息(ZJJK00109992)"）中
+ * 提取首个组件 ID（如 ZJJK00109206）；若无括号格式则返回原字符串。
+ */
+function extractTianyuanComponentId(pdCmptEcd) {
+  if (!pdCmptEcd || typeof pdCmptEcd !== 'string') return ''
+  const match = pdCmptEcd.match(/\((ZJJK[A-Za-z0-9_-]+|[A-Za-z0-9_-]+)\)/)
+  if (match && match[1]) return match[1].trim()
+  const first = pdCmptEcd.split(',')[0].trim()
+  return first
+}
+
 /** 从“天元相关配置”弹窗读取组件编号或者场景编号；弹窗可处于隐藏状态。 */
 function getTianyuanComponentId(root) {
   const documentRoot = root || document
@@ -73,6 +95,66 @@ function getTianyuanComponentId(root) {
     }
   }
   return ''
+}
+
+/**
+ * 异步获取天元配置与组件编号：优先调用后端接口，接口不可用时回退到 DOM 弹窗扫描。
+ */
+async function fetchTianyuanInfoAsync(doc) {
+  const documentRoot = doc || (typeof document !== 'undefined' ? document : null)
+  let componentId = ''
+  let pageName = ''
+  let rawData = null
+
+  // 1. 尝试接口调用
+  try {
+    if (typeof window !== 'undefined' && window.location) {
+      const resPath = getTianyuanResPath(window.location.hash)
+      const origin = (window.location.origin && window.location.origin !== 'null' && window.location.origin !== 'file://')
+        ? window.location.origin
+        : ''
+      if (resPath) {
+        const apiUrl = `${origin}/prod-api/tansun-tcp-ipc/ipcFcnScnInf/getPageRelInfo`
+        const controller = typeof AbortController !== 'undefined' ? new AbortController() : null
+        const timer = controller ? setTimeout(() => controller.abort(), 2500) : null
+        const resp = await fetch(apiUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({ resPath }),
+          signal: controller ? controller.signal : undefined
+        })
+        if (timer) clearTimeout(timer)
+        if (resp && resp.ok) {
+          const resJson = await resp.json()
+          const isSuccess = resJson && (
+            resJson.status === 200 || resJson.status === '200' ||
+            resJson.code === 200 || resJson.code === '200' ||
+            resJson.errorCode === '000000000000'
+          )
+          if (isSuccess && resJson.data) {
+            rawData = resJson.data
+            // 优先提取组件编号，若没有则取场景编号
+            componentId = extractTianyuanComponentId(rawData.pdCmptEcd) || rawData.fcnScnEcd || rawData.tskEcd || ''
+            pageName = rawData.pdTplNm || rawData.fcnScnNm || rawData.avyNm || ''
+          }
+        }
+      }
+    }
+  } catch (err) {
+    console.warn('[Utils] fetchTianyuanInfoAsync API failed, fallback to DOM:', err)
+  }
+
+  // 2. 接口未命中时，回退到 DOM 扫描
+  if (!componentId && documentRoot) {
+    componentId = getTianyuanComponentId(documentRoot)
+  }
+
+  return {
+    componentId: componentId || '',
+    pageName: pageName || '',
+    data: rawData
+  }
 }
 
 /** 生成一次录制会话使用的页面标识。 */
@@ -115,7 +197,19 @@ function saveAsBlobFile(blob, name) {
 }
 
 // 支持 CommonJS 和浏览器全局变量两种导出方式
-const Utils = { uuid, normalizeEventType, getEventTypeName, getTianyuanComponentId, generatePageId, actionTree2Json, txt2Blob, saveAsBlobFile }
+const Utils = {
+  uuid,
+  normalizeEventType,
+  getEventTypeName,
+  getTianyuanResPath,
+  extractTianyuanComponentId,
+  getTianyuanComponentId,
+  fetchTianyuanInfoAsync,
+  generatePageId,
+  actionTree2Json,
+  txt2Blob,
+  saveAsBlobFile
+}
 
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = Utils

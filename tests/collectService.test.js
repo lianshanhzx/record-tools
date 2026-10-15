@@ -275,4 +275,27 @@
       window.fetch = originalFetch
     }
   })
+
+  run('setPageConfig 允许用有效非空配置覆盖先前的空对象', async function () {
+    const tabId = 9999
+    await CollectService.startCollect(tabId)
+
+    // 模拟先写入了空配置（例如页面早期快速上报）
+    await CollectService.setPageConfig(tabId, {})
+    let session = CollectService.getActiveSession(tabId)
+    assert(session.pageConfig && Object.keys(session.pageConfig).length === 0, '初始应保存空配置')
+
+    // 随后异步接口获取到真实配置并上报
+    const realConfig = { '页面名称': '真实对公评级', '组件编号': 'ZJJK123456' }
+    await CollectService.setPageConfig(tabId, realConfig)
+    session = CollectService.getActiveSession(tabId)
+    assert(session.pageConfig['页面名称'] === '真实对公评级', '有效配置未能覆盖空配置')
+
+    // 之后若再来一个空配置，不应把有效配置清空
+    await CollectService.setPageConfig(tabId, {})
+    session = CollectService.getActiveSession(tabId)
+    assert(session.pageConfig['页面名称'] === '真实对公评级', '空配置不应覆盖已有有效配置')
+
+    CollectService.sessions.delete(tabId)
+  })
 })()

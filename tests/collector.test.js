@@ -10,23 +10,27 @@
     if (!condition) throw new Error(message)
   }
 
-  async function run(name, test) {
+  let testQueue = Promise.resolve()
+  function run(name, test) {
     total++
     const row = document.createElement('li')
     results.appendChild(row)
-    try {
-      await test()
-      passed++
-      row.className = 'pass'
-      row.textContent = 'PASS: ' + name
-    } catch (error) {
-      row.className = 'fail'
-      row.textContent = 'FAIL: ' + name + ' - ' + error.message
-      console.error(name, error)
-    }
-    summary.textContent = passed + '/' + total + ' 通过'
-    summary.className = passed === total ? 'pass' : 'fail'
-    document.title = passed === total ? 'PASS - Collector tests' : 'FAIL - Collector tests'
+
+    testQueue = testQueue.then(async () => {
+      try {
+        await test()
+        passed++
+        row.className = 'pass'
+        row.textContent = 'PASS: ' + name
+      } catch (error) {
+        row.className = 'fail'
+        row.textContent = 'FAIL: ' + name + ' - ' + error.message
+        console.error(name, error)
+      }
+      summary.textContent = passed + '/' + total + ' 通过'
+      summary.className = passed === total ? 'pass' : 'fail'
+      document.title = passed === total ? 'PASS - Collector tests' : 'FAIL - Collector tests'
+    })
   }
 
   function wait(ms) {
@@ -109,50 +113,91 @@
     root.remove()
   })
 
-  run('无天元弹窗时主动触发 floatingAction 打开并记录配置，随后自动关闭', async function () {
-    const root = document.createElement('div')
-    root.innerHTML = [
-      '<div class="floatingAction" id="trigger-btn"><i class="el-icon-question"></i></div>'
-    ].join('')
-    document.body.appendChild(root)
+  run('接口直接获取天元相关配置并正确映射所有中文键名', async function () {
+    const originalHash = window.location.hash
+    const originalFetch = window.fetch
+    window.location.hash = '#/rtgMgt/cpctRtg/newCpctRtg/cstmgrIttCpctRtg/FS00005854HostCstmgrIttCpctRtgAply?part=test&newtag=false'
 
-    const triggerBtn = root.querySelector('#trigger-btn')
-    let dialogElement = null
-    let closed = false
-
-    // 模拟点击 floatingAction 后在 DOM 中挂载天元配置弹窗
-    triggerBtn.addEventListener('click', function () {
-      dialogElement = document.createElement('div')
-      dialogElement.className = 'el-dialog'
-      dialogElement.setAttribute('aria-label', '天元相关配置')
-      dialogElement.innerHTML = [
-        '<div class="el-dialog__header"><button class="el-dialog__headerbtn">close</button></div>',
-        '<div class="el-dialog__body">',
-        '  <p><span>组件编号：</span><span>ZJJK00012345</span></p>',
-        '  <p><span>页面名称：</span><span>测试对公客户</span></p>',
-        '</div>'
-      ].join('')
-      dialogElement.querySelector('.el-dialog__headerbtn').addEventListener('click', function () {
-        closed = true
-        dialogElement.remove()
-      })
-      document.body.appendChild(dialogElement)
-    })
+    let requestBody = null
+    window.fetch = async function (url, options) {
+      if (url.indexOf('/prod-api/tansun-tcp-ipc/ipcFcnScnInf/getPageRelInfo') !== -1) {
+        requestBody = JSON.parse(options.body)
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            status: 200,
+            description: '操作成功',
+            data: {
+              tskEcd: 'UML00130188PDCP',
+              pdCmptEcd: '新增对公客户评级-主办客户经理发起对公客户评级申请组件(ZJJK00109206)',
+              tskNm: '客户经理发起对公客户评级',
+              fcnScnEcd: 'FS00005854',
+              pdTplNm: '新增对公客户评级-主办客户经理发起对公客户评级申请页面',
+              fcnScnNm: '新增对公客户评级',
+              avyNm: '新增对公客户评级',
+              resPath: '/rtgMgt/cpctRtg/newCpctRtg/cstmgrIttCpctRtg/FS00005854HostCstmgrIttCpctRtgAply'
+            }
+          })
+        }
+      }
+      return originalFetch.apply(this, arguments)
+    }
 
     window._messages.length = 0
-    Collector.reportPageConfig()
+    await Collector.reportPageConfig()
 
-    // 等待两次轮询（约 600ms）后触发 floatingAction，以及随后获取配置（约 300ms）
-    await wait(1200)
+    assert(requestBody, '未调用天元配置接口')
+    assert(requestBody.resPath === '/rtgMgt/cpctRtg/newCpctRtg/cstmgrIttCpctRtg/FS00005854HostCstmgrIttCpctRtgAply', 'resPath 参数解析不正确')
 
     const configMessages = window._messages.filter(msg => msg.type === 'collectPageConfig')
     assert(configMessages.length === 1, '应上报一次 collectPageConfig')
     const config = configMessages[0].pageConfig
-    assert(config['组件编号'] === 'ZJJK00012345', '未能正确读取主动触发的天元配置组件编号')
-    assert(config['页面名称'] === '测试对公客户', '未能正确读取主动触发的天元配置页面名称')
-    assert(closed, '采集天元配置后应自动关闭弹窗')
+    assert(config['活动名称'] === '新增对公客户评级', '活动名称映射错误')
+    assert(config['页面名称'] === '新增对公客户评级-主办客户经理发起对公客户评级申请页面', '页面名称映射错误')
+    assert(config['页面路径'] === '/rtgMgt/cpctRtg/newCpctRtg/cstmgrIttCpctRtg/FS00005854HostCstmgrIttCpctRtgAply', '页面路径映射错误')
+    assert(config['场景名称'] === '新增对公客户评级', '场景名称映射错误')
+    assert(config['场景编号'] === 'FS00005854', '场景编号映射错误')
+    assert(config['任务名称'] === '客户经理发起对公客户评级', '任务名称映射错误')
+    assert(config['任务编号'] === 'UML00130188PDCP', '任务编号映射错误')
+    assert(config['组件编号'] === '新增对公客户评级-主办客户经理发起对公客户评级申请组件(ZJJK00109206)', '组件编号映射错误')
 
-    root.remove()
-    if (dialogElement && dialogElement.parentNode) dialogElement.remove()
+    window.location.hash = originalHash
+    window.fetch = originalFetch
+  })
+
+  run('天元配置接口失败时平滑降级回退到 DOM 弹窗扫描', async function () {
+    const originalHash = window.location.hash
+    const originalFetch = window.fetch
+    window.location.hash = '#/test/path'
+
+    // 模拟接口失败（例如 404 或网络报错）
+    window.fetch = async function () {
+      return { ok: false, status: 404 }
+    }
+
+    const dialogElement = document.createElement('div')
+    dialogElement.className = 'el-dialog'
+    dialogElement.setAttribute('aria-label', '天元相关配置')
+    dialogElement.innerHTML = [
+      '<div class="el-dialog__body">',
+      '  <p><span>组件编号：</span><span>ZJJK_FALLBACK</span></p>',
+      '  <p><span>页面名称：</span><span>DOM降级测试</span></p>',
+      '</div>'
+    ].join('')
+    document.body.appendChild(dialogElement)
+
+    window._messages.length = 0
+    await Collector.reportPageConfig()
+
+    const configMessages = window._messages.filter(msg => msg.type === 'collectPageConfig')
+    assert(configMessages.length === 1, '应上报一次 collectPageConfig')
+    const config = configMessages[0].pageConfig
+    assert(config['组件编号'] === 'ZJJK_FALLBACK', '未能降级扫描到 DOM 中的组件编号')
+    assert(config['页面名称'] === 'DOM降级测试', '未能降级扫描到 DOM 中的页面名称')
+
+    dialogElement.remove()
+    window.location.hash = ''
+    window.fetch = originalFetch
   })
 })()

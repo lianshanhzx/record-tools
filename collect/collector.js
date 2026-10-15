@@ -86,16 +86,12 @@ const Collector = {
   },
 
   /**
-   * 上报开始采集页面中的「天元相关配置」弹窗内容（每个会话只上报一次，由后台首次写入为准）。
-   * 若初始未扫描到，则尝试主动触发页面悬浮问号按钮打开弹窗，读取配置后再自动关闭。
-   * 页面跳转让位前若仍未抓到则按当前结果收尾。
+   * 上报开始采集页面中的「天元相关配置」内容（每个会话只上报一次，由后台首次写入为准）。
+   * 优先通过页面 URL 的 hash 解析资源路径并直接调用接口获取配置；
+   * 若接口调用失败或未返回有效数据，平滑降级回退到 DOM 扫描天元弹窗。
    */
-  reportPageConfig() {
-    const maxAttempts = 6
-    const intervalMs = 300
-    let attempts = 0
+  async reportPageConfig() {
     let sent = false
-    let triggerAttempted = false
 
     const finalize = (config) => {
       if (sent) return
@@ -104,95 +100,127 @@ const Collector = {
       chrome.runtime.sendMessage({ type: 'collectPageConfig', pageConfig: config }).catch(() => {})
     }
 
-    const poll = () => {
-      const config = this.scanPageConfig()
-      if (Object.keys(config).length > 0) {
-        finalize(config)
-        // 如果是通过主动点击触发打开的弹窗，采集完后自动关闭弹窗
-        if (triggerAttempted) {
-          const dialog = this.findTianyuanDialog()
-          if (dialog) this.closeTianyuanDialog(dialog)
-        }
-        return
-      }
-
-      attempts++
-      // 如果扫描2次（约600ms）仍未找到配置弹窗，且未触发过，则尝试主动点击悬浮按钮触发打开
-      if (attempts >= 2 && !triggerAttempted) {
-        triggerAttempted = true
-        const triggered = this.triggerTianyuanDialog()
-        if (triggered) {
-          console.log('[Collector] 未扫描到天元配置，已主动触发悬浮按钮')
-        }
-      }
-
-      if (attempts >= maxAttempts) {
-        finalize({})
-        return
-      }
-      setTimeout(poll, intervalMs)
-    }
-    poll()
-
     // 页面跳转前若还没上报，立即按当前扫描结果收尾，
     // 避免把新页面的配置当成开始页的 pageConfig。
     window.addEventListener('pagehide', () => {
       finalize(this.scanPageConfig())
     }, { once: true })
-  },
 
-  /**
-   * 查找页面天元弹窗触发按钮（通常是 class="floatingAction" 且包含 el-icon-question 图标）。
-   */
-  findTianyuanTriggerButton() {
-    const actionBtn = document.querySelector('.floatingAction')
-    if (actionBtn) return actionBtn
-    const icon = document.querySelector('.el-icon-question')
-    if (icon && icon.closest) {
-      return icon.closest('.floatingAction') || icon
-    }
-    return null
-  },
-
-  /**
-   * 主动触发天元弹窗。
-   */
-  triggerTianyuanDialog() {
-    const btn = this.findTianyuanTriggerButton()
-    if (!btn) return false
+    // 1. 优先调用后端接口获取天元配置
     try {
-      btn.click()
-      return true
-    } catch (e) {
-      console.warn('[Collector] 触发天元弹窗失败:', e)
-      return false
-    }
-  },
-
-  /**
-   * 自动关闭天元弹窗，恢复页面初始状态。
-   */
-  closeTianyuanDialog(dialog) {
-    if (!dialog) return
-    try {
-      const closeBtn = dialog.querySelector(
-        '.el-dialog__headerbtn, .el-dialog__close, button[aria-label="Close"], button[aria-label="关闭"]'
-      )
-      if (closeBtn && typeof closeBtn.click === 'function') {
-        closeBtn.click()
-      } else {
-        // 如果未找到右上角关闭按钮，尝试遮罩层或者底部关闭/取消按钮
-        const footerBtns = dialog.querySelectorAll('.el-dialog__footer button, button')
-        for (const btn of footerBtns) {
-          const text = (btn.innerText || btn.textContent || '').trim()
-          if (text === '关闭' || text === '取消') {
-            btn.click()
-            break
-          }
-        }
+      const apiConfig = await this.fetchTianyuanConfig()
+      if (apiConfig && Object.keys(apiConfig).length > 0) {
+        finalize(apiConfig)
+        return apiConfig
       }
     } catch (e) {
-      console.warn('[Collector] 自动关闭天元弹窗失败:', e)
+      console.warn('[Collector] 接口获取天元配置失败，回退到 DOM 扫描:', e)
+    }
+
+    // 2. 接口未获取到时，降级轮询已有 DOM 弹窗
+    const maxAttempts = 5
+    const intervalMs = 300
+    let attempts = 0
+
+    return new Promise(resolve => {
+      const poll = () => {
+        const config = this.scanPageConfig()
+        if (Object.keys(config).length > 0) {
+          finalize(config)
+          resolve(config)
+          return
+        }
+        attempts++
+        if (attempts >= maxAttempts) {
+          finalize({})
+          resolve({})
+          return
+        }
+        setTimeout(poll, intervalMs)
+      }
+      poll()
+    })
+  },
+
+  /**
+   * 从当前页面 URL 中解析天元接口所需的 resPath（基于 hash 路由）。
+   */
+  getResPathFromHash() {
+    const hash = window.location.hash || ''
+    if (!hash.startsWith('#/')) return ''
+    const pathWithoutHash = hash.slice(1) // 去掉开头的 '#'
+    return pathWithoutHash.split('?')[0] // 去掉查询参数
+  },
+
+  /**
+   * 调用接口获取天元相关配置。
+   * 接口地址：/prod-api/tansun-tcp-ipc/ipcFcnScnInf/getPageRelInfo
+   */
+  async fetchTianyuanConfig() {
+    const resPath = this.getResPathFromHash()
+    if (!resPath) return null
+
+    const origin = (window.location.origin && window.location.origin !== 'null' && window.location.origin !== 'file://')
+      ? window.location.origin
+      : ''
+
+    const apiUrl = `${origin}/prod-api/tansun-tcp-ipc/ipcFcnScnInf/getPageRelInfo`
+    const controller = typeof AbortController !== 'undefined' ? new AbortController() : null
+    const timer = controller ? setTimeout(() => controller.abort(), 3000) : null
+
+    try {
+      const resp = await fetch(apiUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        credentials: 'include',
+        body: JSON.stringify({ resPath }),
+        signal: controller ? controller.signal : undefined
+      })
+      if (timer) clearTimeout(timer)
+
+      if (!resp.ok) {
+        console.warn('[Collector] 天元配置接口 HTTP 异常:', resp.status, resp.statusText)
+        return null
+      }
+      const resJson = await resp.json()
+      console.log('[Collector] 天元配置接口返回原始数据:', resJson)
+
+      const isSuccess = resJson && (
+        resJson.status === 200 || resJson.status === '200' ||
+        resJson.code === 200 || resJson.code === '200' ||
+        resJson.errorCode === '000000000000'
+      )
+
+      if (isSuccess && resJson.data) {
+        const config = this.mapTianyuanConfigData(resJson.data)
+        console.log('[Collector] 天元配置映射成功:', config)
+        return config
+      }
+      console.warn('[Collector] 天元配置接口未返回有效 data 结构:', resJson)
+      return null
+    } catch (err) {
+      if (timer) clearTimeout(timer)
+      console.warn('[Collector] 调用天元配置接口捕获到错误:', err)
+      throw err
+    }
+  },
+
+  /**
+   * 将后端接口返回的 data 映射为天元配置弹窗对应的标准中文键名。
+   */
+  mapTianyuanConfigData(data) {
+    if (!data || typeof data !== 'object') return {}
+    return {
+      '活动名称': data.avyNm || '',
+      '页面名称': data.pdTplNm || '',
+      '页面路径': data.resPath || '',
+      '场景名称': data.fcnScnNm || '',
+      '场景编号': data.fcnScnEcd || '',
+      '任务名称': data.tskNm || '',
+      '任务编号': data.tskEcd || '',
+      '组件编号': data.pdCmptEcd || ''
     }
   },
 

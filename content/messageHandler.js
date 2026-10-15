@@ -371,6 +371,19 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return true;
   }
   if (request.type === 'getTianyuanComponentId') {
+    if (typeof Utils !== 'undefined' && Utils.fetchTianyuanInfoAsync) {
+      Utils.fetchTianyuanInfoAsync(document).then(info => {
+        sendResponse({
+          componentId: info.componentId || '',
+          pageName: info.pageName || '',
+          data: info.data || null
+        })
+      }).catch(err => {
+        console.warn('[messageHandler] fetchTianyuanInfoAsync error:', err)
+        sendResponse({ componentId: Utils.getTianyuanComponentId(document) })
+      })
+      return true
+    }
     sendResponse({ componentId: Utils.getTianyuanComponentId(document) })
     return false
   }

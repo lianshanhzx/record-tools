@@ -216,11 +216,16 @@ function initRecordControls() {
   })
 }
 
+let suggestedPageName = ''
+
 /** 在一次录制开始时读取组件编号；无有效值时生成回退 pageId。 */
 async function initializePageId(tabId) {
   if (RecordManager.pageId) return RecordManager.pageId
   const response = await sendToContent(tabId, { type: 'getTianyuanComponentId' })
   const componentId = response && response.componentId ? String(response.componentId).trim() : ''
+  if (response && response.pageName) {
+    suggestedPageName = String(response.pageName).trim()
+  }
   RecordManager.pageId = componentId || Utils.generatePageId()
   return RecordManager.pageId
 }
@@ -286,11 +291,12 @@ function openDownloadDialog(format) {
   const input = document.getElementById('downloadNameInput')
   const error = document.getElementById('downloadNameError')
   if (!dialog || !input) return
-  input.value = ''
+  input.value = suggestedPageName || ''
   if (error) error.textContent = ''
   dialog.classList.add('open')
   dialog.setAttribute('aria-hidden', 'false')
   input.focus()
+  if (input.value) input.select()
 }
 
 function closeDownloadDialog() {

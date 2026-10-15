@@ -565,10 +565,17 @@ const CollectService = {
     await this.init()
     const session = this.getActiveSession(tabId)
     if (!session) return null
-    // 只记录开始采集页面的一次（首次写入为准，即使为空对象）。
-    if (session.pageConfig !== null) return session.pageConfig
-    session.pageConfig = pageConfig || {}
+    const incoming = pageConfig || {}
+    const hasCurrent = session.pageConfig && Object.keys(session.pageConfig).length > 0
+    const hasIncoming = Object.keys(incoming).length > 0
+
+    // 如果已有非空配置，且新来的是空配置，则保留已有配置，不被空对象覆盖
+    if (hasCurrent && !hasIncoming) return session.pageConfig
+
+    // 首次写入，或用有效配置覆盖先前的空配置
+    session.pageConfig = incoming
     await this.persist()
+    console.log('[CollectService] setPageConfig saved:', session.pageConfig)
     return session.pageConfig
   },
 

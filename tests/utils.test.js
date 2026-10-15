@@ -73,6 +73,13 @@
     assert(data.pageId === 'ZJJK00066153', '导出缺少 pageId')
   }))
 
+  testResults.push(run('解析天元路由 resPath 与提取组件编号', function () {
+    const hash = '#/rtgMgt/cpctRtg/newCpctRtg/cstmgrIttCpctRtg/FS00005854HostCstmgrIttCpctRtgAply?part=123'
+    assert(Utils.getTianyuanResPath(hash) === '/rtgMgt/cpctRtg/newCpctRtg/cstmgrIttCpctRtg/FS00005854HostCstmgrIttCpctRtgAply', 'resPath 解析错误')
+    const pdCmpt = '新增对公客户评级-主办客户经理发起对公客户评级申请组件(ZJJK00109206),征信信息(ZJJK00109992)'
+    assert(Utils.extractTianyuanComponentId(pdCmpt) === 'ZJJK00109206', '组件编号提取错误')
+  }))
+
   testResults.push(run('导出名称写入顶层 name', function () {
     const data = JSON.parse(Utils.actionTree2Json([], 'https://example.test', 'page-1', '业务流程'))
     assert(data.name === '业务流程', '导出名称错误')
